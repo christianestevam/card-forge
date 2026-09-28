@@ -128,3 +128,4 @@ Mode: strict
 
 <!-- Project-specific corrections from human feedback. -->
 <!-- Format: NEVER/ALWAYS [behavior] (learned [date]) -->
+- ALWAYS descrever a garantia de desfecho como: cada solicitação tem no máximo um desfecho terminal, que nunca é reavaliado; enquanto não o tiver, permanece rastreável e recuperável, com alerta. NEVER prometer que toda solicitação chega a um desfecho. (learned 2026-09-28) <!-- cid:260928-cardforge-release-1:intent-capture:420f692c2fde011575817829d3b312efe4beda49ec77286fc263d55b866c1f5f -->
