@@ -296,7 +296,24 @@ class IssuanceIT {
     awaitDecision(r, "FAILED");
     assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
     assertThat(catalogCalls(productPath(r.productId()))).hasSize(1);
-    assertThat(redisTemplate.hasKey("cardforge:product:v1:" + r.productId())).isFalse();
+    JsonNode tombstone =
+        objectMapper.readTree(
+            redisTemplate.opsForValue().get("cardforge:product:v1:" + r.productId()));
+    assertThat(tombstone.get("status").asText()).isEqualTo("CANCELED");
+  }
+
+  /** TC7: cancelamento conhecido (lápide) recusa a emissão sem consultar o catálogo. */
+  @Test
+  void knownCancellationRefusesIssuanceWithoutCatalog() throws Exception {
+    Request r = Request.random();
+    cache(r.productId(), "CANCELED", Instant.now().minus(Duration.ofMinutes(1)));
+    stubProduct(r.productId(), "ACTIVE");
+
+    send(r.body(), "corr-tombstone");
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(catalogCalls(productPath(r.productId()))).isEmpty();
   }
 
   @Test
