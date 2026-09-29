@@ -619,6 +619,300 @@
           ]
         }
       ]
+    },
+    {
+      "name": "3. Status transitions",
+      "description": "Rode depois da pasta 1. Pedido para o status atual responde 200 sem mudança; a partir de CANCELED, block e unblock respondem 409.",
+      "item": [
+        {
+          "name": "Block card",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}/block",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}",
+                "block"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('BLOCKED', () => pm.expect(pm.response.json().status).to.eql('BLOCKED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Block card again (idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}/block",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}",
+                "block"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('BLOCKED', () => pm.expect(pm.response.json().status).to.eql('BLOCKED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unblock card",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}/unblock",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}",
+                "unblock"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel card",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}/cancel",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('CANCELED', () => pm.expect(pm.response.json().status).to.eql('CANCELED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Block canceled card",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}/block",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}",
+                "block"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type invalid-status-transition', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/invalid-status-transition'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Block cardholder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}/block",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}",
+                "block"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('BLOCKED', () => pm.expect(pm.response.json().status).to.eql('BLOCKED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unblock cardholder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}/unblock",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}",
+                "unblock"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel cardholder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}/cancel",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('CANCELED', () => pm.expect(pm.response.json().status).to.eql('CANCELED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Unblock canceled cardholder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}/unblock",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}",
+                "unblock"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type invalid-status-transition', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/invalid-status-transition'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "variable": [
