@@ -113,6 +113,20 @@ Mode: strict
 - NEVER usar H2 ou banco em memória em testes de integração (affirmed 2026-09-27)
 - NEVER apagar fisicamente produtos, portadores ou cartões (affirmed 2026-09-27)
 
+- NEVER fazer merge em main com o CI vermelho ou com o piso de cobertura rebaixado (affirmed 2026-09-28)
+
+- NEVER configurar retentativa automática de testes com falha (affirmed 2026-09-28)
+
+- NEVER usar a mesma chave para cifragem do PAN, HMAC do PAN e fingerprint de idempotência (affirmed 2026-09-28)
+
+- NEVER definir valor padrão para chaves ou segredos em configuração, Dockerfile ou Compose; única exceção: as credenciais fictícias test/test do LocalStack (affirmed 2026-09-28)
+
+- NEVER importar Spring, JPA, AWS SDK ou Jackson em pacotes de domínio (affirmed 2026-09-28)
+
+- NEVER expor no Actuator endpoints além de health, info e prometheus (affirmed 2026-09-28)
+
+- NEVER usar imagens Docker com tag latest ou sem versão fixada (affirmed 2026-09-28)
+
 ## Mandated
 
 - ALWAYS proteger invariantes de unicidade com constraints no banco, não apenas com verificação prévia (affirmed 2026-09-27)
@@ -124,8 +138,13 @@ Mode: strict
 - ALWAYS documentar no README: setup, diagrama Mermaid, decisões técnicas, comportamento sob falha de cada dependência, estratégia de cache e como o sistema impede cartão para produto inexistente ou cancelado (affirmed 2026-09-27)
 - ALWAYS manter a collection do Postman sincronizada com os endpoints, incluindo token e Idempotency-Key (affirmed 2026-09-27)
 
+- ALWAYS impedir a inicialização quando uma chave de cifragem do PAN, HMAC do PAN ou fingerprint de idempotência estiver ausente, malformada ou igual a outra dessas chaves (affirmed 2026-09-28)
+
 ## Corrections
 
 <!-- Project-specific corrections from human feedback. -->
 <!-- Format: NEVER/ALWAYS [behavior] (learned [date]) -->
 - ALWAYS descrever a garantia de desfecho como: cada solicitação tem no máximo um desfecho terminal, que nunca é reavaliado; enquanto não o tiver, permanece rastreável e recuperável, com alerta. NEVER prometer que toda solicitação chega a um desfecho. (learned 2026-09-28) <!-- cid:260928-cardforge-release-1:intent-capture:420f692c2fde011575817829d3b312efe4beda49ec77286fc263d55b866c1f5f -->
+- NEVER registrar conformidade integral com PCI-DSS ou LGPD como requisito desta release; ALWAYS tratá-las como controles de aplicação adotados (PAN cifrado, exibição apenas dos 4 últimos dígitos, nada sensível em logs ou mensagens, histórico auditável), sem afirmar conformidade integral. (learned 2026-09-28) <!-- cid:260928-cardforge-release-1:feasibility:e885ea78e73e635fb7e5c813b99f328d34628dcdc05f018983919e0fea6c4ae2 -->
+- Itens do núcleo (Q1) que também têm corte de profundidade (Postman, README com runbooks) continuam obrigatórios; o corte só reduz o detalhamento. (learned 2026-09-28) <!-- cid:260928-cardforge-release-1:scope-definition:948b460a9fff4bab37baff135b3f7af16e758369729f62d664ec1adb9a6af219 -->
+- ALWAYS escrever ADRs no formato curto, com Contexto, Decisão, Consequências e Alternativas Rejeitadas em uma ou duas linhas cada; exceção: os ADRs de cache, retry/DLQ, outbox e idempotência ficam completos. (learned 2026-09-28) <!-- cid:260928-cardforge-release-1:scope-definition:8e364a11214dc64152475ccbaaa9e00b081ea121737f7c63ab9c570d58d5bbfc -->

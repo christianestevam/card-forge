@@ -1,0 +1,28 @@
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-29T03:19:00Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Minor | aidlc/spaces/default/intents/260928-cardforge-release-1/inception/units-generation/unit-of-work.md > seção "U5: consolidated-view", subseção "Notas" | O `kind: service` de U5 conflitava com o empacotamento embutido (não há mais um executável próprio) sem justificativa registrada. | (Satisfeita) O artefato agora traz a nota: "U5 é uma capacidade implantada dentro do container do cardholder-service, e não um serviço próprio. O tipo `service` foi mantido porque ela expõe endpoint público próprio e tem as mesmas preocupações de design funcional e de NFR de um serviço (latência, timeouts e degradação das duas chamadas remotas)." Isso cobre exatamente a ação pedida (registrar a razão da classificação apesar do empacotamento embutido). | Resolved |
+| R-02 | Minor | aidlc/spaces/default/intents/260928-cardforge-release-1/inception/units-generation/units-generation-questions.md > Q1–Q6 | O Passo 2 do stage file pede uma pergunta dedicada sobre preferências de ordenação/paralelismo entre unidades; ela continua ausente como item próprio entre Q1 e Q6 — o resultado (paralelismo entre U2/U3/U4, sem ciclo) segue capturado só no Resumo Consolidado. | Não bloqueia (Minor, sem impacto nos artefatos gerados, que descrevem corretamente o paralelismo em `unit-of-work-dependency.md` § "Paralelismo possível"). Para rodadas futuras, incluir essa pergunta como item explícito do Passo 2 para fechar o rastro de decisão. | Unresolved |
+| R-03 | Minor | aidlc/spaces/default/intents/260928-cardforge-release-1/inception/units-generation/units-generation-questions.md > "Consolidated Summary Confirmation", linha "Ordem de construção" | A linha "Ordem de construção (encaminhada à Delivery Planning, não definida aqui): risco primeiro, U1 → U2 → U3 → U4 → U5 → U6, em sequência" registra uma sequência específica e completa dentro deste estágio, inclusive com "em sequência" para U2/U3/U4 — que a nota do próprio stage file proíbe ("2.7 MUST NOT recommend an implementation order or identify a critical path"). Os artefatos entregues (`unit-of-work-dependency.md`) não repetem esse erro: a seção "Paralelismo possível" mantém corretamente que U2, U3 e U4 "podem ser construídas em qualquer ordem, ou intercaladas", sem prescrever "em sequência". O risco é apenas de leitura futura do arquivo de perguntas como se fosse uma decisão de ordem já tomada nesta etapa, contradizendo a topologia declarada (que permite paralelismo entre U2/U3/U4). | Ao encaminhar a preferência para a Delivery Planning, deixar explícito no resumo que "em sequência" é apenas uma leitura possível entre várias ordens topológicas válidas (não uma prescrição desta etapa), e que a decisão final de ordem/paralelismo cabe à Delivery Planning — sem alterar `unit-of-work-dependency.md`, que já está correto. | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Nenhuma ferramenta declarada nesta stage; parsing manual do bloco `yaml` de `unit-of-work-dependency.md` | PASS — 6 nomes únicos (`walking-skeleton`, `card-issuance`, `cardholder-registration`, `product-catalog`, `consolidated-view`, `delivery-docs`), formato de identificador válido; todo `depends_on` referencia um nome declarado; nenhum self-dep; grafo acíclico; todo `kind` presente é um de `service`\|`packaging`, válido no enum | Confirma topologia bem formada, sem ciclos entre unidades; inalterada desde a iteração anterior |
+| Conferência da correção Q6 (revisão desta rodada) | PASS — `units-generation-questions.md` Q6, `unit-of-work.md` (U1 e U4), `unit-of-work-dependency.md` (motivo de U4) e `decisions.md` ADR-004 descrevem de forma idêntica: `cardforge-platform` embutido nos três serviços; product-service usa só correlationId e o handler base de ProblemDetail; outbox ativado por auto-configuração condicional só em cardholder-service e card-service | A correção pedida pelo humano foi propagada de forma consistente por todos os artefatos afetados, incluindo o ADR-004 solicitado explicitamente |
+| Conferência cruzada de cobertura (traceability.json × unit-of-work-story-map.md) | PASS — as 31 histórias (US0.1–US8.4) aparecem uma vez em `traceability.json` com `status: OK`, e o `target` bate com a coluna "Unidade" do mapa; soma por unidade (4+9+9+4+1+4=31) confere | Nenhuma história órfã, duplicada ou com `GAP`; inalterado desde a iteração anterior |
+| Conferência de propriedade de componentes (components.md × unit-of-work.md) | PASS — os 12 componentes do catálogo têm exatamente um dono de unidade; direção das dependências entre componentes traduzida corretamente para arestas entre unidades | Nenhum componente órfão nem com dono duplicado |
+| Conferência dos testes críticos (team.md × unit-of-work.md) | PASS — TC1/TC9/TC10/TC-IDEM em U3, TC2–TC7/TC-PAN em U2, TC8 em U5, batendo com a natureza de cada teste crítico descrito em `team.md` | Nenhum teste crítico órfão ou mal atribuído |
+
+### Summary
+
+A correção da Q6 (implantação do `cardforge-platform`) foi propagada corretamente e de forma consistente por `unit-of-work.md`, `unit-of-work-dependency.md` e ADR-004, exatamente como pedido. R-01 está resolvido com a nota adicionada em U5. R-02 segue não bloqueante. O único ponto novo (R-03, Minor) é que o resumo de perguntas registra uma ordem de construção "em sequência" que a própria stage proíbe recomendar — mas isso não contamina os artefatos entregues, que mantêm corretamente o paralelismo entre U2/U3/U4 apenas como topologia. Sem achados Critical ou mais de dois Major, o veredito é READY.

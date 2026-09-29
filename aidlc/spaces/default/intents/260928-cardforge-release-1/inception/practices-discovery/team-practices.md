@@ -1,9 +1,9 @@
-# Team-Level Rules
+# Práticas do time — CardForge
 
-> This team's affirmed practices and corrections. Loaded after `org.md` as
-> strict-additive guidance; contradictions with broader policy are rejected.
-> Populated by the practices-discovery affirmation gate. Edit at the gate,
-> not directly.
+> Práticas afirmadas na entrevista da Practices Discovery (Q1–Q12). Elas
+> especializam `aidlc/spaces/default/memory/org.md` e não repetem o que
+> `aidlc/spaces/default/memory/project.md` já afirma; onde o detalhe está lá,
+> esta página apenas o referencia.
 
 ## Way of Working
 
@@ -29,10 +29,6 @@
 - O piso e a lista de exclusões nunca são rebaixados ou ampliados para fazer uma etapa passar.
 - CI: `./mvnw verify` roda os unitários (`*Test`), os de integração (`*IT`), a verificação do piso de cobertura, o `spotless:check` e o SpotBugs com FindSecBugs; um job separado executa `scripts/smoke-test.sh` contra o ambiente em Docker Compose. Os dois são criados junto com o esqueleto.
 
-## Guard Policy
-
-<!-- Affirmed by the team. Mode: strict, relaxed, or off. Strict here holds for every intent and cannot be changed from chat. A section under the retired Change Control heading, written by an earlier release, is still read. -->
-
 ## Deployment
 
 - Nesta release não há deploy remoto: o destino é o ambiente completo em Docker Compose descrito em `project.md` (`## Deployment`), subido com um único comando.
@@ -49,14 +45,3 @@
 - Lint e análise estática: SpotBugs com FindSecBugs, restrito às categorias de segurança e de correção de prioridade alta; um achado bloqueia o build e o merge.
 - Limites de camada: um teste ArchUnit por serviço garante que o domínio não depende de Spring, JPA, AWS SDK ou Jackson; ele roda no `./mvnw verify` e bloqueia o merge.
 - Nomenclatura idiomática e em inglês, seguindo a linguagem ubíqua do product brief; pacote base, DTOs, `ProblemDetail` e enums conforme `project.md` (`## Code Style`) e `engineering-standards.md`.
-## Forbidden
-
-<!-- Team-specific forbidden patterns -->
-
-## Mandated
-
-<!-- Team-specific mandates -->
-
-## Corrections
-
-<!-- Self-learning loop appends here. -->

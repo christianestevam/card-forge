@@ -3,15 +3,13 @@
 
 ## Interpretations
 <!-- example: 2026-05-29T10:14:32Z — chose REST over GraphQL; the consuming team only needs CRUD, revisit if subscriptions land -->
-- 2026-09-28T17:30:00Z — A resposta da Q3 (PCI-DSS completo) contradizia o brief e o escopo confirmado; a Q9 a substitui (controles de aplicação, sem afirmar conformidade integral). A data da Q1 (29/09) foi corrigida pela Q8 para 05/10/2026.
+- 2026-09-29T02:10:00Z — As respostas Q1 e Q2 se contradiziam sobre a documentação e a Q4 veio como "Outro" sem especificação; a Q5 e a Q6 resolveram (documentação por unidade, platform em dois serviços). Um "Revise Plan" seguido de "Pode continuar" foi reapresentado e confirmado como "Approve Plan".
 
 ## Deviations
 <!-- example: 2026-05-29T10:14:32Z — skipped the optional caching layer the stage prose suggested; the dataset is small enough that it adds risk -->
-- 2026-09-28T17:31:00Z — Não perguntei sobre stack, arquitetura nem contas AWS em uso, embora a etapa sugira; já estão decididos em project.md (Tech Stack, Decided, Deployment).
 
 ## Tradeoffs
 <!-- example: 2026-05-29T10:14:32Z — picked TDD over BDD this run; the team is unit-first and the domain is well-understood -->
-- 2026-09-28T17:45:00Z — Veredito "viável com condições" em vez de "inviável": o risco dominante é o prazo, tratado pela lista de cortes da Definição de Escopo e pelo esqueleto primeiro, já que integridade e testes críticos não são negociáveis.
 
 ## Open questions
 <!-- example: 2026-05-29T10:14:32Z — confirm the retention window with compliance before the next stage hardens the schema -->
