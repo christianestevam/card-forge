@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
@@ -159,7 +160,7 @@ class IssuanceIT {
 
     @Override
     public Instant instant() {
-      return Instant.now().plus(offset.get());
+      return Instant.now().truncatedTo(ChronoUnit.MICROS).plus(offset.get());
     }
   }
 

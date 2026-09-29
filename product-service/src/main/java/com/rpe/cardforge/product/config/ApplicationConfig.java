@@ -1,5 +1,6 @@
 package com.rpe.cardforge.product.config;
 
+import com.rpe.cardforge.platform.time.Clocks;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
@@ -18,7 +19,7 @@ class ApplicationConfig {
 
   @Bean
   Clock clock() {
-    return Clock.systemUTC();
+    return Clocks.systemUtcMicros();
   }
 
   @Bean
