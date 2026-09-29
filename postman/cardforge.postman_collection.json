@@ -156,6 +156,87 @@
           ]
         },
         {
+          "name": "2a. List products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products?page=0&size=20",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('page metadata', () => pm.expect(pm.response.json().page.size).to.eql(20));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2b. Update product name and description",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{productId}}",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gold Plus\",\n  \"description\": \"Gold credit card, upgraded\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('name updated', () => pm.expect(pm.response.json().name).to.eql('Gold Plus'));",
+                  "pm.test('bin kept', () => pm.expect(pm.response.json().bin).to.eql(pm.collectionVariables.get('bin')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "3. Register cardholder",
           "request": {
             "method": "POST",
@@ -435,6 +516,46 @@
                 "exec": [
                   "pm.test('status 409', () => pm.response.to.have.status(409));",
                   "pm.test('type bin-already-registered', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/bin-already-registered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 - Update with bin (bin-immutable)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{productId}}",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bin\": \"99999999\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('type bin-immutable', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/bin-immutable'));"
                 ]
               }
             }
@@ -1070,6 +1191,46 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "pm.test('CANCELED', () => pm.expect(pm.response.json().status).to.eql('CANCELED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Update canceled product (read-only)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{canceledProductId}}",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{canceledProductId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Too late\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type product-canceled-read-only', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/product-canceled-read-only'));"
                 ]
               }
             }
