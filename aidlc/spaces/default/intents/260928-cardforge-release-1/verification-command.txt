@@ -1,0 +1,1 @@
+./mvnw -B verify && docker compose up -d --build --wait && ./scripts/smoke-test.sh
