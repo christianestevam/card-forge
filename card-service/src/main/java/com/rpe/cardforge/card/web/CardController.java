@@ -53,7 +53,8 @@ class CardController {
       content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @GetMapping("/{cardId}")
   CardResponse get(@PathVariable UUID cardId) {
-    return CardResponse.from(cards.get(cardId));
+    CardQueryService.CardDetails details = cards.getWithProduct(cardId);
+    return CardResponse.from(details.card(), CardResponse.ProductSection.from(details.product()));
   }
 
   /** ACTIVE -> BLOCKED; 200 sem mudança se já estiver BLOCKED; 409 a partir de CANCELED. */

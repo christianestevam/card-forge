@@ -55,7 +55,7 @@ public class ProductEligibility {
     if (cached.isPresent()
         && cached.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
       meters.counter("cardforge.product.cache", "result", "hit").increment();
-      return new Eligibility.Eligible(cached.get().bin());
+      return new Eligibility.Eligible(cached.get().bin(), cached.get().validatedAt());
     }
     meters.counter("cardforge.product.cache", "result", "miss").increment();
 
@@ -74,12 +74,10 @@ public class ProductEligibility {
     }
 
     return switch (lookup) {
-      case Found found when found.status() == ProductState.ACTIVE -> {
-        writeCache(
-            new ProductObservation(
-                productId, found.name(), found.bin(), ProductState.ACTIVE, observedAt));
-        yield new Eligibility.Eligible(found.bin());
-      }
+      case Found found when found.status() == ProductState.ACTIVE ->
+          afterActiveObservation(
+              new ProductObservation(
+                  productId, found.name(), found.bin(), ProductState.ACTIVE, observedAt));
       case Found found -> {
         writeCache(
             new ProductObservation(
@@ -91,6 +89,41 @@ public class ProductEligibility {
         yield new Eligibility.Ineligible(FailureReason.PRODUCT_NOT_FOUND);
       }
     };
+  }
+
+  /**
+   * Grava a observação ACTIVE e decide por ela, a menos que o cache a recuse por já ter uma
+   * observação mais recente ou definitiva. Nesse caso a decisão segue a vencedora: um cancelamento
+   * conhecido recusa a emissão, mesmo que a resposta ACTIVE desta consulta tenha chegado depois.
+   */
+  private Eligibility afterActiveObservation(ProductObservation observed) {
+    boolean saved;
+    try {
+      saved = cache.save(observed);
+    } catch (ProductCache.CacheUnavailableException e) {
+      degraded("write", e);
+      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
+    }
+    if (saved) {
+      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
+    }
+
+    Optional<ProductObservation> winner;
+    try {
+      winner = cache.find(observed.productId());
+    } catch (ProductCache.CacheUnavailableException e) {
+      throw new TransientIssuanceException("Superseded product observation could not be read", e);
+    }
+    if (winner.isPresent() && winner.get().isKnownCancellation()) {
+      log.info("ACTIVE response for product {} lost to a known cancellation", observed.productId());
+      return new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
+    }
+    if (winner.isPresent()
+        && winner.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
+      return new Eligibility.Eligible(winner.get().bin(), winner.get().validatedAt());
+    }
+    throw new TransientIssuanceException(
+        "Product observation superseded by a newer one; deciding again later");
   }
 
   private Optional<ProductObservation> readCache(UUID productId) {

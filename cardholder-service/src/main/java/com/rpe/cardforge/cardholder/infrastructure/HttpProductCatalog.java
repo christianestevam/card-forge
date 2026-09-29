@@ -38,9 +38,13 @@ class HttpProductCatalog implements ProductCatalog {
                 int status = response.getStatusCode().value();
                 if (status == 200) {
                   ProductDto dto = response.bodyTo(ProductDto.class);
+                  // Contrato remoto: status só ACTIVE ou CANCELED e BIN com 8 dígitos. Qualquer
+                  // outra coisa (inclusive null) é erro de contrato, nunca fato de negócio.
                   if (dto == null
                       || !productId.equals(dto.id())
                       || dto.bin() == null
+                      || !dto.bin().matches("\\d{8}")
+                      || dto.status() == null
                       || !STATUSES.contains(dto.status())) {
                     throw new CatalogMisconfiguredException(
                         "Catalog response out of contract", null);

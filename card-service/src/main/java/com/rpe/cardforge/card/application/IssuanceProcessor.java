@@ -9,12 +9,15 @@ import com.rpe.cardforge.card.domain.PanGenerator;
 import com.rpe.cardforge.platform.outbox.OutboxWriter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -32,6 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class IssuanceProcessor {
 
   private static final Logger log = LoggerFactory.getLogger(IssuanceProcessor.class);
+  private static final int MAX_DECISION_ATTEMPTS = 3;
 
   private final IssuanceProcessingRepository processing;
   private final CardRepository cards;
@@ -68,13 +72,23 @@ public class IssuanceProcessor {
   }
 
   public void process(IssuanceRequested request) {
-    try {
-      decide(request);
-    } catch (NonCanceledCardConflictException e) {
-      // Outra solicitação criou um cartão para o mesmo portador e produto entre a verificação e a
-      // inserção. A transação foi desfeita; a decisão recomeça do início e vê o cartão existente.
-      log.info("Unique card conflict for request {}; deciding again", request.issuanceRequestId());
-      decide(request);
+    for (int attempt = 1; ; attempt++) {
+      try {
+        decide(request);
+        return;
+      } catch (NonCanceledCardConflictException | ObservationExpiredException e) {
+        // A transação foi desfeita. Conflito de unicidade: outra solicitação criou um cartão para o
+        // mesmo portador e produto; a nova decisão vê o cartão existente. Observação vencida: a
+        // nova decisão busca uma observação atual, fora da transação.
+        if (attempt >= MAX_DECISION_ATTEMPTS) {
+          throw new TransientIssuanceException(
+              "No stable decision after " + attempt + " attempts", e);
+        }
+        log.info(
+            "Deciding request {} again: {}",
+            request.issuanceRequestId(),
+            e.getClass().getSimpleName());
+      }
     }
   }
 
@@ -102,6 +116,11 @@ public class IssuanceProcessor {
                     now));
             return;
           }
+          Eligibility.Eligible eligible = (Eligibility.Eligible) result;
+          if (!withinEligibilityWindow(eligible, now)) {
+            // A observação venceu entre a verificação e a emissão (espera por conexão, lock etc.).
+            throw new ObservationExpiredException();
+          }
           UUID cardId = UUID.randomUUID();
           IssuanceDecision decision =
               IssuanceDecision.issued(request.issuanceRequestId(), cardId, now);
@@ -109,10 +128,22 @@ public class IssuanceProcessor {
             republishExisting(request.issuanceRequestId());
             return;
           }
-          issueCard(cardId, request, ((Eligibility.Eligible) result).bin(), now);
+          issueCard(cardId, request, eligible.bin(), now);
           publish(decision);
           countDecision(decision);
         });
+  }
+
+  private boolean withinEligibilityWindow(Eligibility.Eligible eligible, Instant now) {
+    Duration age = Duration.between(eligible.validatedAt(), now);
+    return !age.isNegative() && age.compareTo(properties.eligibilityWindow()) <= 0;
+  }
+
+  /** A observação que autorizou a emissão passou da janela antes do ponto de emissão. */
+  static class ObservationExpiredException extends RuntimeException {
+    ObservationExpiredException() {
+      super("Product observation expired before issuance");
+    }
   }
 
   /** Grava o desfecho de recusa ou, se outra entrega já decidiu, republica o existente. */
@@ -171,7 +202,25 @@ public class IssuanceProcessor {
         IssuanceCompleted.from(decision));
   }
 
+  /**
+   * Registra a decisão (log e métrica) só depois do commit: se a transação for desfeita, nada
+   * afirma uma emissão que não aconteceu.
+   */
   private void countDecision(IssuanceDecision decision) {
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              recordDecision(decision);
+            }
+          });
+    } else {
+      recordDecision(decision);
+    }
+  }
+
+  private void recordDecision(IssuanceDecision decision) {
     log.info(
         "Issuance request {} decided {}{}",
         decision.issuanceRequestId(),

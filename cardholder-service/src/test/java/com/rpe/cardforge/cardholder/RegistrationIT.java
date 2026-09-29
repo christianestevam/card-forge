@@ -29,9 +29,12 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -55,6 +58,7 @@ import software.amazon.awssdk.services.sqs.model.Message;
  * outbox é acionado manualmente para controlar o momento da publicação.
  */
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(
     properties = {
       "JWT_ISSUER_URI=http://issuer.test/realms/cardforge",
@@ -153,6 +157,24 @@ class RegistrationIT {
         .andExpect(jsonPath("$.status").value("ACTIVE"));
   }
 
+  /**
+   * R2: o cadastro duplicado responde 409 sem que o CPF completo apareça no log da aplicação nem no
+   * log do PostgreSQL.
+   */
+  @Test
+  void duplicateCpfNeverLeaksTheCpfToLogs(CapturedOutput output) throws Exception {
+    UUID productId = activeProduct();
+    String cpf = TestCpfs.random();
+    register(cpf, "Maria da Silva", LocalDate.of(1990, 5, 20), productId)
+        .andExpect(status().isAccepted());
+
+    register(cpf, "Outra Pessoa", LocalDate.of(1985, 1, 1), productId)
+        .andExpect(status().isConflict());
+
+    assertThat(output.getAll()).doesNotContain(cpf);
+    assertThat(postgres.getLogs()).doesNotContain(cpf);
+  }
+
   @Test
   void invalidRegistrationListsEveryFieldAndCreatesNothing() throws Exception {
     UUID productId = UUID.randomUUID();
@@ -214,6 +236,51 @@ class RegistrationIT {
     register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), productId)
         .andExpect(status().isAccepted());
     assertThat(cardholdersFor(productId)).isEqualTo(1);
+  }
+
+  /**
+   * R5: catálogo com status nulo é erro de contrato: o cadastro é aceito com alerta, e a consulta
+   * consolidada degrada em vez de responder 500.
+   */
+  @Test
+  void catalogWithNullStatusIsAContractErrorNotAServerError() throws Exception {
+    UUID productId = UUID.randomUUID();
+    remote.stubFor(
+        get(productPath(productId))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":null}"""
+                        .formatted(productId))));
+
+    String receipt =
+        register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), productId)
+            .andExpect(status().isAccepted())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    overview(UUID.fromString(JsonPath.read(receipt, "$.cardholderId")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+  }
+
+  /** R6: corpo JSON null na fila de resultados vai direto para a DLQ. */
+  @Test
+  void nullResultBodyGoesToDeadLetterQueue() throws Exception {
+    sendCompleted("null");
+
+    String url = sqs.getQueueUrl(b -> b.queueName(COMPLETED_DLQ)).get().queueUrl();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                sqs
+                    .receiveMessage(b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
+                    .get()
+                    .messages()
+                    .stream()
+                    .anyMatch(m -> m.body().equals("null")));
   }
 
   /** (d) SQS fora no cadastro: 202, o evento fica no outbox e sai quando a SQS volta. */

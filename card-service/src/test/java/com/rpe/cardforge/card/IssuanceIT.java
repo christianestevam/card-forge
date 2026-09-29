@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -139,13 +140,22 @@ class IssuanceIT {
   /** Relógio real com um deslocamento ajustável pelo teste. */
   static class AdjustableClock extends Clock {
     private final AtomicReference<Duration> offset = new AtomicReference<>(Duration.ZERO);
+    private final AtomicInteger readsUntilJump = new AtomicInteger(-1);
+    private volatile Duration jump = Duration.ZERO;
 
     void advance(Duration amount) {
       offset.updateAndGet(current -> current.plus(amount));
     }
 
+    /** Avança o relógio em {@code amount} na leitura seguinte às próximas {@code reads}. */
+    void jumpAfterReads(int reads, Duration amount) {
+      jump = amount;
+      readsUntilJump.set(reads);
+    }
+
     void reset() {
       offset.set(Duration.ZERO);
+      readsUntilJump.set(-1);
     }
 
     @Override
@@ -160,6 +170,9 @@ class IssuanceIT {
 
     @Override
     public Instant instant() {
+      if (readsUntilJump.getAndUpdate(n -> n >= 0 ? n - 1 : n) == 0) {
+        advance(jump);
+      }
       return Instant.now().truncatedTo(ChronoUnit.MICROS).plus(offset.get());
     }
   }
@@ -518,6 +531,50 @@ class IssuanceIT {
   }
 
   /**
+   * R4: a observação ACTIVE tinha 4 min 59 s na verificação de elegibilidade, mas passou da janela
+   * de 5 minutos antes da transação de emissão. A emissão não pode usá-la: reconsulta o catálogo,
+   * que agora responde CANCELED.
+   */
+  @Test
+  void observationThatExpiresBeforeTheIssuingTransactionIsNotUsed() throws Exception {
+    Request r = Request.random();
+    cache(r.productId(), "ACTIVE", Instant.now().minus(Duration.ofMinutes(5).minusSeconds(1)));
+    stubProduct(r.productId(), "CANCELED");
+
+    clock.jumpAfterReads(1, Duration.ofSeconds(2)); // a leitura da transação já vê a janela vencida
+    send(r.body(), "corr-r4");
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
+  }
+
+  /**
+   * R1: uma consulta ao catálogo iniciada antes do cancelamento responde ACTIVE depois que outra
+   * emissão já gravou a lápide CANCELED. A gravação ACTIVE é recusada pelo cache, e a emissão
+   * precisa respeitar o cancelamento conhecido em vez de emitir.
+   */
+  @Test
+  void activeResponseLosingToAKnownCancellationDoesNotIssue() throws Exception {
+    UUID productId = UUID.randomUUID();
+    String path = productPath(productId);
+    catalog.stubFor(
+        get(urlEqualTo(path)).willReturn(okJson(product(productId, "ACTIVE")).withFixedDelay(800)));
+    Request r = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+
+    send(r.body(), "corr-r1");
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .pollInterval(Duration.ofMillis(10))
+        .until(() -> catalogCalls(path).size() >= 1);
+    cache(productId, "CANCELED", Instant.now()); // outra emissão observou o cancelamento
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
+  }
+
+  /**
    * NFR7 / BR1.3: depois do cancelamento no catálogo, a emissão ainda pode usar a observação ACTIVE
    * até 5 minutos (janela aceita pela BR4.1) e para quando ela vence, sem esperar o tempo real.
    */
@@ -560,6 +617,62 @@ class IssuanceIT {
     awaitDecision(r, "FAILED");
     assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
     assertThat(catalogCalls(productPath(r.productId()))).isEmpty();
+  }
+
+  /**
+   * R5: resposta 200 fora do contrato (estado interno NOT_FOUND, status nulo) é erro de
+   * configuração: nunca vira desfecho de negócio, e a mensagem volta para retentativa.
+   */
+  @Test
+  void catalogResponseOutOfContractNeverDecides() {
+    Request internalState = Request.random();
+    Request nullStatus = Request.random();
+    catalog.stubFor(
+        get(urlEqualTo(productPath(internalState.productId())))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":"NOT_FOUND"}"""
+                        .formatted(internalState.productId()))));
+    catalog.stubFor(
+        get(urlEqualTo(productPath(nullStatus.productId())))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":null}"""
+                        .formatted(nullStatus.productId()))));
+
+    send(internalState.body(), "corr-r5-internal");
+    send(nullStatus.body(), "corr-r5-null");
+
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                catalogCalls(productPath(internalState.productId())).size() >= 2
+                    && catalogCalls(productPath(nullStatus.productId())).size() >= 2);
+    assertThat(decisionCount(internalState)).isZero();
+    assertThat(decisionCount(nullStatus)).isZero();
+  }
+
+  /** R6: corpo JSON null é mensagem inválida e vai direto para a DLQ. */
+  @Test
+  void nullMessageBodyGoesToDeadLetterQueue() throws Exception {
+    send("null", "corr-r6-null");
+
+    String dlqUrl =
+        sqs.getQueueUrl(b -> b.queueName("card-issuance-requested-dlq")).get().queueUrl();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                sqs
+                    .receiveMessage(
+                        b -> b.queueUrl(dlqUrl).waitTimeSeconds(1).maxNumberOfMessages(10))
+                    .get()
+                    .messages()
+                    .stream()
+                    .anyMatch(m -> m.body().equals("null")));
   }
 
   @Test
@@ -686,6 +799,20 @@ class IssuanceIT {
     listCards(null, null).andExpect(status().isBadRequest());
   }
 
+  /** R7: página enorme passa na validação de page e size, mas não pode virar 500. */
+  @Test
+  void cardListingRejectsPagesBeyondTheSupportedOffset() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/cards")
+                .param("cardholderId", UUID.randomUUID().toString())
+                .param("page", String.valueOf(Integer.MAX_VALUE))
+                .param("size", "100")
+                .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))))
+        .andExpect(status().isBadRequest())
+        .andExpect(
+            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/malformed-request"));
+  }
+
   private org.springframework.test.web.servlet.ResultActions listCards(
       String cardholderId, String size) throws Exception {
     var request =
@@ -725,6 +852,87 @@ class IssuanceIT {
         .andExpect(
             jsonPath("$.paths['/api/v1/cards/{cardId}/block'].post.responses['409'].description")
                 .value(org.hamcrest.Matchers.containsString("invalid-status-transition")));
+  }
+
+  /** R3: a consulta do cartão traz o produto do cache (atual até 5 min). */
+  @Test
+  void cardQueryShowsCurrentProductFromCache() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-current");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    int callsAfterIssuance = catalogCalls(productPath(r.productId())).size();
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.observedAt").isNotEmpty())
+        .andExpect(jsonPath("$.product.data.id").value(r.productId().toString()))
+        .andExpect(jsonPath("$.product.data.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.product.data.bin").isNotEmpty());
+    assertThat(catalogCalls(productPath(r.productId()))).hasSize(callsAfterIssuance);
+  }
+
+  /** R3: observação com mais de 5 minutos continua servindo à consulta, sinalizada como STALE. */
+  @Test
+  void cardQueryShowsStaleProductFromOldCacheEntry() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-stale");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    Instant old = Instant.now().minus(Duration.ofMinutes(30));
+    cache(r.productId(), "ACTIVE", old);
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("STALE"))
+        .andExpect(jsonPath("$.product.observedAt").value(old.toString()));
+  }
+
+  /** R3: sem registro no cache, a consulta busca o catálogo; sem nenhum dos dois, UNAVAILABLE. */
+  @Test
+  void cardQueryFallsBackToCatalogAndThenToUnavailable() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-catalog");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    redisTemplate.delete("cardforge:product:v1:" + r.productId());
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.data.name").value("Gold"));
+
+    redisTemplate.delete("cardforge:product:v1:" + r.productId());
+    catalog.stubFor(get(productPath(r.productId())).willReturn(serverError()));
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.panLastFour").isNotEmpty())
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.product.data").doesNotExist());
+  }
+
+  /** R3: cartão de produto cancelado continua consultável, com o produto CANCELED. */
+  @Test
+  void cardOfCanceledProductRemainsQueryable() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-canceled");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    cache(r.productId(), "CANCELED", Instant.now());
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.data.status").value("CANCELED"));
+  }
+
+  private org.springframework.test.web.servlet.ResultActions getCard(UUID cardId) throws Exception {
+    return mvc.perform(
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                "/api/v1/cards/" + cardId)
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))));
   }
 
   @Test

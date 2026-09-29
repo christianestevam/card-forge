@@ -1,5 +1,6 @@
 package com.rpe.cardforge.product.application;
 
+import com.rpe.cardforge.platform.paging.PageBounds;
 import com.rpe.cardforge.product.domain.Bin;
 import com.rpe.cardforge.product.domain.Product;
 import java.time.Clock;
@@ -57,6 +58,7 @@ public class ProductService {
 
   @Transactional(readOnly = true)
   public ProductPage list(int page, int size) {
+    PageBounds.offset(page, size);
     return new ProductPage(repository.findPage(page, size), page, size, repository.count());
   }
 

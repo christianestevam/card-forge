@@ -15,8 +15,10 @@ import io.awspring.cloud.sqs.listener.SqsHeaders;
 import io.awspring.cloud.sqs.listener.Visibility;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionException;
 
 /**
  * Consumidor de {@code card-issuance-requested}. A mensagem só é confirmada quando o método termina
@@ -24,8 +26,9 @@ import org.springframework.stereotype.Component;
  *
  * <ul>
  *   <li>Negócio (produto inexistente ou cancelado): FAILED gravado, confirma, sem retry.
- *   <li>Técnica ou configuração: não confirma e adia a próxima entrega por {@code
- *       ChangeMessageVisibility} (backoff exponencial com jitter e teto).
+ *   <li>Técnica (inclusive banco ou transação indisponíveis) ou configuração: não confirma e adia a
+ *       próxima entrega por {@code ChangeMessageVisibility} (backoff exponencial com jitter e
+ *       teto).
  *   <li>Mensagem inválida ou versão desconhecida: DLQ explícita e alerta.
  * </ul>
  */
@@ -81,7 +84,12 @@ class IssuanceRequestedListener {
 
       try {
         processor.process(request);
-      } catch (TransientIssuanceException | IssuanceConfigurationException e) {
+      } catch (TransientIssuanceException
+          | IssuanceConfigurationException
+          | DataAccessException
+          | TransactionException e) {
+        // Banco ou transação indisponíveis também são falha técnica: seguem o mesmo backoff, em vez
+        // da visibilidade padrão da fila, que mudaria o orçamento de retentativas.
         int attempt = parseReceiveCount(receiveCount);
         int delay = backoff.delaySeconds(attempt);
         log.warn(

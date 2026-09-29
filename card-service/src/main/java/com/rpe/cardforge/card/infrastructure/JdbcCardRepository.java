@@ -81,7 +81,7 @@ class JdbcCardRepository implements CardRepository {
   }
 
   @Override
-  public List<Card> findByCardholderId(UUID cardholderId, int offset, int limit) {
+  public List<Card> findByCardholderId(UUID cardholderId, long offset, int limit) {
     return jdbc.sql(
             """
             SELECT * FROM cards WHERE cardholder_id = ?

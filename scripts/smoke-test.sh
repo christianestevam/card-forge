@@ -12,6 +12,8 @@ CLIENT_ID="${CLIENT_ID:-onboarding-gateway}"
 # Segredo fixo de desenvolvimento, exclusivamente local (ver README).
 CLIENT_SECRET="${CLIENT_SECRET:-onboarding-gateway-local-secret}"
 ISSUANCE_TIMEOUT_SECONDS="${ISSUANCE_TIMEOUT_SECONDS:-60}"
+# Limite de cada chamada individual: uma requisição pendurada falha o teste em vez de travá-lo.
+CURL_LIMITS=(--connect-timeout 5 --max-time 15)
 CORRELATION_ID="smoke-$(date +%s)-$RANDOM"
 
 for tool in curl jq; do
@@ -26,7 +28,7 @@ call() {
   local method="$1" url="$2" expected="$3" body="${4:-}"
   local out status
   out=$(mktemp)
-  status=$(curl -sS -o "$out" -w '%{http_code}' -X "$method" "$url" \
+  status=$(curl -sS "${CURL_LIMITS[@]}" -o "$out" -w '%{http_code}' -X "$method" "$url" \
     -H "Authorization: Bearer $TOKEN" \
     -H "X-Correlation-Id: $CORRELATION_ID" \
     -H 'Content-Type: application/json' \
@@ -52,7 +54,7 @@ random_cpf() {
 }
 
 step "Token (client credentials: $CLIENT_ID)"
-TOKEN=$(curl -sS -f -X POST "$KEYCLOAK_URL/realms/cardforge/protocol/openid-connect/token" \
+TOKEN=$(curl -sS -f "${CURL_LIMITS[@]}" -X POST "$KEYCLOAK_URL/realms/cardforge/protocol/openid-connect/token" \
   -d grant_type=client_credentials -d client_id="$CLIENT_ID" -d client_secret="$CLIENT_SECRET" \
   | jq -er .access_token) || fail "could not obtain token"
 
