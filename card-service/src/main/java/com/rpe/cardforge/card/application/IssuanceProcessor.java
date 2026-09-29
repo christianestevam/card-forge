@@ -117,19 +117,25 @@ public class IssuanceProcessor {
             return;
           }
           Eligibility.Eligible eligible = (Eligibility.Eligible) result;
-          if (!withinEligibilityWindow(eligible, now)) {
+          Instant issuedAt = clock.instant();
+          if (!withinEligibilityWindow(eligible, issuedAt)) {
             // A observação venceu entre a verificação e a emissão (espera por conexão, lock etc.).
             throw new ObservationExpiredException();
           }
           UUID cardId = UUID.randomUUID();
           IssuanceDecision decision =
-              IssuanceDecision.issued(request.issuanceRequestId(), cardId, now);
+              IssuanceDecision.issued(request.issuanceRequestId(), cardId, issuedAt);
           if (!processing.insertIfAbsent(decision)) {
             republishExisting(request.issuanceRequestId());
             return;
           }
-          issueCard(cardId, request, eligible.bin(), now);
+          issueCard(cardId, request, eligible.bin(), issuedAt);
           publish(decision);
+          // Todas as escritas já ocorreram: espera no banco/colisões de PAN não podem estender
+          // silenciosamente a validade. A exceção desfaz cartão, decisão e outbox juntos.
+          if (!withinEligibilityWindow(eligible, clock.instant())) {
+            throw new ObservationExpiredException();
+          }
           countDecision(decision);
         });
   }

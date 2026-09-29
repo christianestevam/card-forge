@@ -19,6 +19,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import com.rpe.cardforge.card.application.CardRepository;
+import com.rpe.cardforge.card.domain.Card;
 import com.rpe.cardforge.card.domain.RandomDigits;
 import java.time.Clock;
 import java.time.Duration;
@@ -34,6 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -50,6 +53,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -206,6 +210,77 @@ class IssuanceIT {
   @Autowired StringRedisTemplate redisTemplate;
   @Autowired ObjectMapper objectMapper;
   @Autowired MockMvc mvc;
+  @MockitoSpyBean CardRepository cardRepository;
+
+  @Test
+  void expiryDuringCardInsertionRollsBackCardDecisionAndOutbox() throws Exception {
+    Request r = Request.random();
+    cache(r.productId(), "ACTIVE", clock.instant().minusSeconds(240));
+    stubProduct(r.productId(), "CANCELED");
+    var advanced = new AtomicBoolean();
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              boolean inserted = (boolean) invocation.callRealMethod();
+              Card card = invocation.getArgument(0);
+              if (card.issuanceRequestId().equals(r.issuanceRequestId())
+                  && advanced.compareAndSet(false, true)) {
+                clock.advance(Duration.ofSeconds(120));
+              }
+              return inserted;
+            })
+        .when(cardRepository)
+        .insertIfPanFree(org.mockito.ArgumentMatchers.any());
+
+    send(r.body(), "expiry-during-insert");
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        jdbc.sql(
+                                "SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                            .param(r.issuanceRequestId())
+                            .query(String.class)
+                            .optional())
+                    .isPresent());
+    assertThat(
+            jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                .param(r.issuanceRequestId())
+                .query(String.class)
+                .single())
+        .isEqualTo("FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(advanced.get()).isTrue();
+    assertThat(cardCount(r)).isZero();
+    assertThat(
+            jdbc.sql(
+                    "SELECT count(*) FROM outbox_events WHERE aggregate_id = ? AND payload->>'status' = 'ISSUED'")
+                .param(r.issuanceRequestId())
+                .query(Long.class)
+                .single())
+        .isZero();
+  }
+
+  @Test
+  void basicCardQueryDoesNotConsultTheCatalogOrEnrichTheResponse() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "basic-card-query");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    redisTemplate.delete("cardforge:product:v1:" + r.productId());
+    int calls = catalogCalls(productPath(r.productId())).size();
+    catalog.stubFor(get(productPath(r.productId())).willReturn(serverError()));
+
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                    "/api/v1/cards/" + cardId)
+                .param("includeProduct", "false")
+                .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.panLastFour").isNotEmpty())
+        .andExpect(jsonPath("$.product").doesNotExist());
+    assertThat(catalogCalls(productPath(r.productId()))).hasSize(calls);
+  }
 
   // ---------------------------------------------------------------------------------------------
 
