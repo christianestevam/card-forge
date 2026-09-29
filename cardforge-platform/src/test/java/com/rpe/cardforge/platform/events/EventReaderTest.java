@@ -40,5 +40,9 @@ class EventReaderTest {
         .isInstanceOf(InvalidEventException.class);
     assertThatThrownBy(() -> reader.read(envelope("T", 1, "null"), "T", 1, Payload.class))
         .isInstanceOf(InvalidEventException.class);
+    assertThatThrownBy(() -> reader.read("null", "T", 1, Payload.class))
+        .isInstanceOf(InvalidEventException.class);
+    assertThatThrownBy(() -> reader.read("  null  ", "T", 1, Payload.class))
+        .isInstanceOf(InvalidEventException.class);
   }
 }

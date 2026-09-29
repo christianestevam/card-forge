@@ -238,6 +238,51 @@ class RegistrationIT {
     assertThat(cardholdersFor(productId)).isEqualTo(1);
   }
 
+  /**
+   * R5: catálogo com status nulo é erro de contrato: o cadastro é aceito com alerta, e a consulta
+   * consolidada degrada em vez de responder 500.
+   */
+  @Test
+  void catalogWithNullStatusIsAContractErrorNotAServerError() throws Exception {
+    UUID productId = UUID.randomUUID();
+    remote.stubFor(
+        get(productPath(productId))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":null}"""
+                        .formatted(productId))));
+
+    String receipt =
+        register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), productId)
+            .andExpect(status().isAccepted())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    overview(UUID.fromString(JsonPath.read(receipt, "$.cardholderId")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+  }
+
+  /** R6: corpo JSON null na fila de resultados vai direto para a DLQ. */
+  @Test
+  void nullResultBodyGoesToDeadLetterQueue() throws Exception {
+    sendCompleted("null");
+
+    String url = sqs.getQueueUrl(b -> b.queueName(COMPLETED_DLQ)).get().queueUrl();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                sqs
+                    .receiveMessage(b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
+                    .get()
+                    .messages()
+                    .stream()
+                    .anyMatch(m -> m.body().equals("null")));
+  }
+
   /** (d) SQS fora no cadastro: 202, o evento fica no outbox e sai quando a SQS volta. */
   @Test
   void sqsUnavailableKeepsEventInOutboxUntilItRecovers() throws Exception {

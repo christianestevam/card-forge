@@ -19,6 +19,9 @@ public class EventReader {
     } catch (JsonProcessingException e) {
       throw new InvalidEventException("Message body is not a valid event envelope", e);
     }
+    if (envelope == null) {
+      throw new InvalidEventException("Message body is null");
+    }
     if (!expectedType.equals(envelope.eventType())) {
       throw new InvalidEventException("Unexpected eventType " + envelope.eventType());
     }

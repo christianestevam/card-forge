@@ -587,6 +587,62 @@ class IssuanceIT {
     assertThat(catalogCalls(productPath(r.productId()))).isEmpty();
   }
 
+  /**
+   * R5: resposta 200 fora do contrato (estado interno NOT_FOUND, status nulo) é erro de
+   * configuração: nunca vira desfecho de negócio, e a mensagem volta para retentativa.
+   */
+  @Test
+  void catalogResponseOutOfContractNeverDecides() {
+    Request internalState = Request.random();
+    Request nullStatus = Request.random();
+    catalog.stubFor(
+        get(urlEqualTo(productPath(internalState.productId())))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":"NOT_FOUND"}"""
+                        .formatted(internalState.productId()))));
+    catalog.stubFor(
+        get(urlEqualTo(productPath(nullStatus.productId())))
+            .willReturn(
+                okJson(
+                    """
+                    {"id":"%s","name":"Gold","bin":"12345678","status":null}"""
+                        .formatted(nullStatus.productId()))));
+
+    send(internalState.body(), "corr-r5-internal");
+    send(nullStatus.body(), "corr-r5-null");
+
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                catalogCalls(productPath(internalState.productId())).size() >= 2
+                    && catalogCalls(productPath(nullStatus.productId())).size() >= 2);
+    assertThat(decisionCount(internalState)).isZero();
+    assertThat(decisionCount(nullStatus)).isZero();
+  }
+
+  /** R6: corpo JSON null é mensagem inválida e vai direto para a DLQ. */
+  @Test
+  void nullMessageBodyGoesToDeadLetterQueue() throws Exception {
+    send("null", "corr-r6-null");
+
+    String dlqUrl =
+        sqs.getQueueUrl(b -> b.queueName("card-issuance-requested-dlq")).get().queueUrl();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(
+            () ->
+                sqs
+                    .receiveMessage(
+                        b -> b.queueUrl(dlqUrl).waitTimeSeconds(1).maxNumberOfMessages(10))
+                    .get()
+                    .messages()
+                    .stream()
+                    .anyMatch(m -> m.body().equals("null")));
+  }
+
   @Test
   void invalidMessageGoesToDeadLetterQueue() throws Exception {
     String marker = "garbage-" + UUID.randomUUID();
