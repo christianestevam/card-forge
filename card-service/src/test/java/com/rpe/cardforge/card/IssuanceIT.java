@@ -518,6 +518,31 @@ class IssuanceIT {
   }
 
   /**
+   * R1: uma consulta ao catálogo iniciada antes do cancelamento responde ACTIVE depois que outra
+   * emissão já gravou a lápide CANCELED. A gravação ACTIVE é recusada pelo cache, e a emissão
+   * precisa respeitar o cancelamento conhecido em vez de emitir.
+   */
+  @Test
+  void activeResponseLosingToAKnownCancellationDoesNotIssue() throws Exception {
+    UUID productId = UUID.randomUUID();
+    String path = productPath(productId);
+    catalog.stubFor(
+        get(urlEqualTo(path)).willReturn(okJson(product(productId, "ACTIVE")).withFixedDelay(800)));
+    Request r = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+
+    send(r.body(), "corr-r1");
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .pollInterval(Duration.ofMillis(10))
+        .until(() -> catalogCalls(path).size() >= 1);
+    cache(productId, "CANCELED", Instant.now()); // outra emissão observou o cancelamento
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
+  }
+
+  /**
    * NFR7 / BR1.3: depois do cancelamento no catálogo, a emissão ainda pode usar a observação ACTIVE
    * até 5 minutos (janela aceita pela BR4.1) e para quando ela vence, sem esperar o tempo real.
    */
