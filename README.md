@@ -150,6 +150,31 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la (testes `knownCancellationRefusesIssuanceWithoutCatalog` e `RedisProductCacheIT`).
 6. **Prazo máximo de 5 minutos depois do cancelamento no catálogo (NFR7):** o teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Com o produto já cancelado no catálogo, a observação `ACTIVE` de 4 minutos ainda autoriza (janela aceita pela BR4.1); passados 5 minutos, a emissão é recusada com `PRODUCT_CANCELED`.
 
+## Catálogo de produtos
+
+| Endpoint | Regra | Escopo |
+|---|---|---|
+| `POST /api/v1/products` | Cria `ACTIVE`; `bin` com 8 dígitos, único (409 `bin-already-registered`) | `products:write` |
+| `GET /api/v1/products?page=&size=` | Paginado, padrão 20, máximo 100 (`size` maior gera 400), do mais recente para o mais antigo | `products:read` |
+| `GET /api/v1/products/{id}` | 404 se não existe | `products:read` |
+| `PATCH /api/v1/products/{id}` | Só `name` e `description` de produto `ACTIVE`. Campo ausente mantém o valor; `description: null` limpa. `bin` no corpo (inclusive `null`) gera **422 `bin-immutable`**, nunca ignorado. Produto `CANCELED` gera **409 `product-canceled-read-only`** | `products:write` |
+| `POST /api/v1/products/{id}/cancel` | `ACTIVE` → `CANCELED` (ver abaixo) | `products:write` |
+| `DELETE` | Não existe exclusão física: 405 | — |
+
+## Consulta consolidada (`GET /api/v1/cardholders/{id}/overview`)
+
+Sempre 200 quando o portador existe. O estado de negócio (`issuance.status`) fica separado da completude de cada parte (`availability`):
+
+| Caso | `issuance.status` | `card.availability` | `product.availability` |
+|---|---|---|---|
+| Pendente | `PENDING` | `NOT_APPLICABLE` | `CURRENT` ou `STALE` |
+| Falha de negócio | `FAILED` (com `failureReason`) | `NOT_APPLICABLE` | `CURRENT` ou `STALE` |
+| Emitido, card-service fora | `ISSUED` (com `cardId`) | `UNAVAILABLE` | `CURRENT` ou `STALE` |
+| Produto desatualizado | qualquer | qualquer | `STALE` (com `observedAt`) |
+| Produto sem observação | qualquer | qualquer | `UNAVAILABLE` |
+
+O `cardholder-service` guarda a última observação de cada produto (`product_observations`), gravada no cadastro e a cada consulta bem-sucedida ao catálogo (vence a mais recente). O produto sai `CURRENT` quando veio do catálogo na própria requisição e `STALE` quando veio dessa observação guardada ([ADR-002 do Desenho de Domínio](aidlc/spaces/default/intents/260928-cardforge-release-1/inception/domain-design/decisions.md)). Os detalhes do cartão vêm sempre do `card-service`, com timeout.
+
 ## Status de produtos, cartões e portadores
 
 | Endpoint | Transição | Escopo |
@@ -181,7 +206,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | TC5: duas solicitações concorrentes para o mesmo portador e produto | `IssuanceIT.concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard` |
 | TC6: cache vencido com catálogo fora: nenhuma emissão, retentativa | `IssuanceIT.staleCacheWithCatalogDownDoesNotIssueAndRetries` |
 | TC7: cancelamento conhecido impede uso de `ACTIVE` antigo | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `RedisProductCacheIT` |
-| TC8: consulta consolidada distingue os casos de completude | `RegistrationIT.overview*` (catálogo e card-service offline ou lentos) |
+| TC8: consulta consolidada distingue os cinco casos (pendente, falha de negócio, card-service fora, produto `STALE`, produto sem observação) | `RegistrationIT.consolidatedViewDistinguishesTheFiveCases` e `RegistrationIT.overview*` (catálogo e card-service offline ou lentos) |
 | TC-PAN: colisão forçada de PAN | `IssuanceIT.panCollisionIsResolvedWithANewCandidate` |
 | Recusa de negócio sem retry | `IssuanceIT.canceledProductFailsWithoutRetry` |
 
@@ -192,7 +217,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | Dependência fora | Cadastro (`POST /cardholders`) | Emissão | Consulta consolidada (`/overview`) |
 |---|---|---|---|
 | **SQS** | **202.** O evento fica pendente no outbox (`cardforge_outbox_pending`) e é publicado quando a SQS volta (teste `sqsUnavailableKeepsEventInOutboxUntilItRecovers`). | Não recebe mensagens; retoma sozinha quando a SQS volta. Resultados ficam no outbox do `card-service`. | Funciona: mostra `PENDING` até o resultado chegar. |
-| **Catálogo (`product-service`)** | **202.** Timeout, 5xx ou conexão recusada fazem o cadastro seguir, e a validação fica para a emissão. 401, 403 ou contrato inválido também aceitam, com `ALERT configuration`. | Usa a observação em cache se tiver até 5 min. Sem ela, falha técnica com backoff até o catálogo voltar (testes `catalogServerError…` e `catalogTimeout…`). | 200 com `product.availability = UNAVAILABLE`. |
+| **Catálogo (`product-service`)** | **202.** Timeout, 5xx ou conexão recusada fazem o cadastro seguir, e a validação fica para a emissão. 401, 403 ou contrato inválido também aceitam, com `ALERT configuration`. | Usa a observação em cache se tiver até 5 min. Sem ela, falha técnica com backoff até o catálogo voltar (testes `catalogServerError…` e `catalogTimeout…`). | 200 com `product.availability = STALE` e o `observedAt` da última observação guardada; `UNAVAILABLE` se nunca houve observação. |
 | **Redis** | Não usa. | Consulta o catálogo direto e registra a degradação. | Não usa. |
 | **card-service** | Não depende. | — | 200 com `issuance.status = ISSUED`, `cardId` preservado e `card.availability = UNAVAILABLE`. |
 | **Keycloak** | Tokens já emitidos seguem válidos até expirar (5 min). Sem token novo, a chamada ao catálogo falha como indisponibilidade e o cadastro é aceito. | Mesma regra: falha técnica com backoff. | Partes do produto e do cartão ficam `UNAVAILABLE`. |
@@ -245,8 +270,6 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 
 Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6) que não entraram na entrega.
 
-- **Consulta consolidada:** o produto sai `CURRENT` ou `UNAVAILABLE`. O caso `STALE` (observação guardada no cadastro, `ProductObservation`) não foi implementado.
-- **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto.
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
 - **Métrica de profundidade das filas e DLQs:** não implementada. Use `ApproximateNumberOfMessages` pela CLI (ver o procedimento manual).
