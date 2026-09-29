@@ -85,3 +85,9 @@ aidlc/diagnostics/
 .claude/settings.local.json
 # END AI-DLC:gitignore
 aidlc.settings.local.json
+
+# CardForge
+target/
+.env
+.local/
+*.iml
