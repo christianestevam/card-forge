@@ -1,0 +1,658 @@
+{
+  "info": {
+    "_postman_id": "6f1c2e1a-0d7b-4a51-9a3e-3c9a1f1b2c01",
+    "name": "CardForge R1",
+    "description": "Fluxo feliz e erros principais da R1. Rode a pasta 0 primeiro para obter o token. Use o environment 'CardForge local' (credenciais fixas de desenvolvimento, exclusivamente locais).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Get token (client credentials)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{keycloakUrl}}/realms/cardforge/protocol/openid-connect/token",
+              "host": [
+                "{{keycloakUrl}}"
+              ],
+              "path": [
+                "realms",
+                "cardforge",
+                "protocol",
+                "openid-connect",
+                "token"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('token', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Happy path",
+      "item": [
+        {
+          "name": "1. Create product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gold\",\n  \"description\": \"Gold credit card\",\n  \"bin\": \"{{bin}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('bin', String(Math.floor(10000000 + Math.random() * 89999999)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('productId', pm.response.json().id);",
+                  "pm.test('ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Get product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{productId}}",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{productId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Register cardholder",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{cpf}}\",\n  \"fullName\": \"Maria da Silva\",\n  \"birthDate\": \"1990-05-20\",\n  \"productId\": \"{{productId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = []; for (let i = 0; i < 9; i++) d.push(Math.floor(Math.random() * 10));",
+                  "for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); let r = (s * 10) % 11; d.push(r === 10 ? 0 : r); }",
+                  "pm.collectionVariables.set('cpf', d.join(''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set('cardholderId', r.cardholderId);",
+                  "pm.collectionVariables.set('issuanceRequestId', r.issuanceRequestId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Get cardholder (masked CPF)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('masked CPF', () => pm.expect(pm.response.json().maskedCpf).to.match(/^\\*\\*\\*\\.\\d{3}\\.\\d{3}-\\*\\*$/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Overview (repeat until ISSUED)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/{{cardholderId}}/overview",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "{{cardholderId}}",
+                "overview"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const o = pm.response.json();",
+                  "const attempts = Number(pm.collectionVariables.get('overviewAttempts') || 0);",
+                  "if (o.issuance.status === 'PENDING' && attempts < 30) {",
+                  "  // Emissão assíncrona: repete a consulta até o desfecho (até ~30 s).",
+                  "  pm.collectionVariables.set('overviewAttempts', attempts + 1);",
+                  "  setTimeout(() => {}, 1000);",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('overviewAttempts', 0);",
+                  "  pm.test('issued', () => pm.expect(o.issuance.status).to.eql('ISSUED'));",
+                  "  pm.test('card available', () => pm.expect(o.card.availability).to.eql('AVAILABLE'));",
+                  "  if (o.issuance.cardId) pm.collectionVariables.set('cardId', o.issuance.cardId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Get card (panLastFour only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('only last four', () => pm.expect(pm.response.json().panLastFour).to.match(/^\\d{4}$/));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Errors",
+      "item": [
+        {
+          "name": "422 - Product with invalid BIN",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gold\",\n  \"bin\": \"12ab\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('type validation-failed', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/validation-failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Product with duplicate BIN",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Another\",\n  \"bin\": \"{{bin}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type bin-already-registered', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/bin-already-registered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 - Cardholder with invalid fields",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"12345678900\",\n  \"fullName\": \"Ana\",\n  \"birthDate\": \"2015-01-01\",\n  \"productId\": \"{{productId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('type validation-failed', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/validation-failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Cardholder with duplicate CPF",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{cpf}}\",\n  \"fullName\": \"Outra Pessoa\",\n  \"birthDate\": \"1985-01-01\",\n  \"productId\": \"{{productId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type cpf-already-registered', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/cpf-already-registered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 - Cardholder for unknown product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{cpf2}}\",\n  \"fullName\": \"Maria da Silva\",\n  \"birthDate\": \"1990-05-20\",\n  \"productId\": \"00000000-0000-0000-0000-000000000000\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = []; for (let i = 0; i < 9; i++) d.push(Math.floor(Math.random() * 10));",
+                  "for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); let r = (s * 10) % 11; d.push(r === 10 ? 0 : r); }",
+                  "pm.collectionVariables.set('cpf2', d.join(''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('type product-not-found', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/product-not-found'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 - Unknown product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('type resource-not-found', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/resource-not-found'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 - Unknown cardholder overview",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders/00000000-0000-0000-0000-000000000000/overview",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders",
+                "00000000-0000-0000-0000-000000000000",
+                "overview"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('type resource-not-found', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/resource-not-found'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 - Unknown card",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('type resource-not-found', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/resource-not-found'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "bin",
+      "value": ""
+    },
+    {
+      "key": "cpf",
+      "value": ""
+    },
+    {
+      "key": "cpf2",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    },
+    {
+      "key": "cardholderId",
+      "value": ""
+    },
+    {
+      "key": "issuanceRequestId",
+      "value": ""
+    },
+    {
+      "key": "cardId",
+      "value": ""
+    },
+    {
+      "key": "overviewAttempts",
+      "value": "0"
+    }
+  ]
+}
