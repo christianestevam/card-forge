@@ -11,8 +11,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * Cliente do product-service: 404 e CANCELED são fatos de negócio; timeout, 5xx e conexão
- * recusada são indisponibilidade; 401, 403 e contrato inválido são configuração.
+ * Cliente do product-service: 404 e CANCELED são fatos de negócio; timeout, 5xx e conexão recusada
+ * são indisponibilidade; 401, 403 e contrato inválido são configuração.
  */
 @Component
 class HttpProductCatalog implements ProductCatalog {
@@ -42,7 +42,8 @@ class HttpProductCatalog implements ProductCatalog {
                       || !productId.equals(dto.id())
                       || dto.bin() == null
                       || !STATUSES.contains(dto.status())) {
-                    throw new CatalogMisconfiguredException("Catalog response out of contract", null);
+                    throw new CatalogMisconfiguredException(
+                        "Catalog response out of contract", null);
                   }
                   return new Found(dto.id(), dto.name(), dto.bin(), dto.status());
                 }

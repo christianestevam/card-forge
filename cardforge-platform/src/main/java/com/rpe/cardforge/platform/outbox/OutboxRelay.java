@@ -27,8 +27,8 @@ import software.amazon.awssdk.services.sqs.model.SendMessageBatchResultEntry;
 /**
  * Publica os eventos pendentes do outbox. Cada lote é selecionado com {@code FOR UPDATE SKIP
  * LOCKED}, enviado por {@code SendMessageBatch} com timeout curto mantendo o lock, e só os eventos
- * aceitos individualmente são marcados como enviados. Resposta perdida pode gerar republicação;
- * os consumidores são idempotentes.
+ * aceitos individualmente são marcados como enviados. Resposta perdida pode gerar republicação; os
+ * consumidores são idempotentes.
  */
 public class OutboxRelay {
 
@@ -101,7 +101,8 @@ public class OutboxRelay {
     }
 
     Map<String, List<PendingEvent>> byDestination = new LinkedHashMap<>();
-    batch.forEach(e -> byDestination.computeIfAbsent(e.destination(), d -> new ArrayList<>()).add(e));
+    batch.forEach(
+        e -> byDestination.computeIfAbsent(e.destination(), d -> new ArrayList<>()).add(e));
 
     List<UUID> accepted = new ArrayList<>();
     byDestination.forEach((destination, events) -> accepted.addAll(send(destination, events)));
@@ -123,8 +124,7 @@ public class OutboxRelay {
                   b ->
                       b.queueUrl(queueUrl)
                           .entries(entries)
-                          .overrideConfiguration(
-                              o -> o.apiCallTimeout(properties.sendTimeout())))
+                          .overrideConfiguration(o -> o.apiCallTimeout(properties.sendTimeout())))
               .get(properties.sendTimeout().toMillis() + 1000, TimeUnit.MILLISECONDS);
       if (response.hasFailed() && !response.failed().isEmpty()) {
         log.warn(
@@ -182,8 +182,10 @@ public class OutboxRelay {
           .messageBody(objectMapper.writeValueAsString(envelope))
           .messageAttributes(
               Map.of(
-                  CorrelationId.MESSAGE_ATTRIBUTE, stringAttribute(event.correlationId()),
-                  "eventType", stringAttribute(event.eventType())))
+                  CorrelationId.MESSAGE_ATTRIBUTE,
+                  stringAttribute(event.correlationId()),
+                  "eventType",
+                  stringAttribute(event.eventType())))
           .build();
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("Stored outbox payload is not valid JSON", e);

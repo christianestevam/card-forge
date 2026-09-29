@@ -17,8 +17,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Cache explícito de observações de produto: registro único por produto em {@code
- * cardforge:product:v1:{id}}, JSON, TTL físico de 24 h. A leitura nunca renova {@code
- * validatedAt}.
+ * cardforge:product:v1:{id}}, JSON, TTL físico de 24 h. A leitura nunca renova {@code validatedAt}.
  */
 @Component
 class RedisProductCache implements ProductCache {
@@ -50,7 +49,11 @@ class RedisProductCache implements ProductCache {
       CachedProduct cached = objectMapper.readValue(json, CachedProduct.class);
       return Optional.of(
           new ProductObservation(
-              cached.productId(), cached.name(), cached.bin(), cached.status(), cached.validatedAt()));
+              cached.productId(),
+              cached.name(),
+              cached.bin(),
+              cached.status(),
+              cached.validatedAt()));
     } catch (JsonProcessingException | RuntimeException e) {
       log.warn("Ignoring unreadable cache entry for product {}", productId);
       return Optional.empty();

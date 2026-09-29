@@ -6,8 +6,8 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Corpo do cadastro. As regras de CPF, idade e nome ficam no domínio, que lista todas as
- * violações de uma vez. Contém dados pessoais: {@link #toString()} não os expõe.
+ * Corpo do cadastro. As regras de CPF, idade e nome ficam no domínio, que lista todas as violações
+ * de uma vez. Contém dados pessoais: {@link #toString()} não os expõe.
  */
 record RegisterCardholderRequest(
     @NotBlank String cpf,

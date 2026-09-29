@@ -130,7 +130,9 @@ class RegistrationIT {
     String outboxPayload = outboxPayload(requestId);
     assertThat(outboxPayload).doesNotContain(cpf).doesNotContain("1990-05-20");
 
-    await().atMost(Duration.ofSeconds(10)).until(() -> relay.publishBatch() == 0 && pending(requestId) == 0);
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .until(() -> relay.publishBatch() == 0 && pending(requestId) == 0);
     JsonNode published = awaitPublished(requestId);
     assertThat(published.get("eventType").asText()).isEqualTo("IssuanceRequested");
     assertThat(published.get("payload").get("cardholderId").asText())
@@ -141,7 +143,9 @@ class RegistrationIT {
             MockMvcRequestBuilders.get("/api/v1/cardholders/" + cardholderId)
                 .with(scopes("cardholders:read")))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.maskedCpf").value("***." + cpf.substring(3, 6) + "." + cpf.substring(6, 9) + "-**"))
+        .andExpect(
+            jsonPath("$.maskedCpf")
+                .value("***." + cpf.substring(3, 6) + "." + cpf.substring(6, 9) + "-**"))
         .andExpect(jsonPath("$.birthDate").doesNotExist())
         .andExpect(jsonPath("$.cpf").doesNotExist())
         .andExpect(jsonPath("$.status").value("ACTIVE"));
@@ -156,7 +160,11 @@ class RegistrationIT {
         .andExpect(
             jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/validation-failed"))
         .andExpect(jsonPath("$.invalidFields.length()").value(3))
-        .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("12345678900"))));
+        .andExpect(
+            jsonPath("$.detail")
+                .value(
+                    org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("12345678900"))));
 
     assertThat(cardholdersFor(productId)).isZero();
     assertThat(remote.findAll(getRequestedFor(urlEqualTo(productPath(productId))))).isEmpty();
@@ -172,7 +180,8 @@ class RegistrationIT {
     register(cpf, "Outra Pessoa", LocalDate.of(1985, 1, 1), productId)
         .andExpect(status().isConflict())
         .andExpect(
-            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/cpf-already-registered"));
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/cpf-already-registered"));
     assertThat(cardholdersFor(productId)).isEqualTo(1);
   }
 
@@ -182,14 +191,16 @@ class RegistrationIT {
     remote.stubFor(get(productPath(missing)).willReturn(aResponse().withStatus(404)));
     register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), missing)
         .andExpect(status().isUnprocessableEntity())
-        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/product-not-found"));
+        .andExpect(
+            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/product-not-found"));
     assertThat(cardholdersFor(missing)).isZero();
 
     UUID canceled = UUID.randomUUID();
     stubProduct(canceled, "CANCELED");
     register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), canceled)
         .andExpect(status().isUnprocessableEntity())
-        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/product-canceled"));
+        .andExpect(
+            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/product-canceled"));
     assertThat(cardholdersFor(canceled)).isZero();
   }
 
@@ -244,7 +255,9 @@ class RegistrationIT {
     String issued = completed(r.requestId(), "ISSUED", cardId, null);
 
     sendCompleted(issued);
-    await().atMost(Duration.ofSeconds(15)).until(() -> "ISSUED".equals(requestStatus(r.requestId())));
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(() -> "ISSUED".equals(requestStatus(r.requestId())));
 
     sendCompleted(issued);
     String contradictory = completed(r.requestId(), "FAILED", null, "PRODUCT_CANCELED");
@@ -272,7 +285,9 @@ class RegistrationIT {
                     {"id":"%s","panLastFour":"4242","expirationDate":"2031-09","status":"ACTIVE"}"""
                         .formatted(cardId))));
     sendCompleted(completed(r.requestId(), "ISSUED", cardId, null));
-    await().atMost(Duration.ofSeconds(15)).until(() -> "ISSUED".equals(requestStatus(r.requestId())));
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(() -> "ISSUED".equals(requestStatus(r.requestId())));
 
     overview(r.cardholderId())
         .andExpect(status().isOk())
@@ -298,7 +313,9 @@ class RegistrationIT {
     remote.stubFor(get("/api/v1/cards/" + cardId).willReturn(aResponse().withStatus(500)));
     remote.stubFor(get(productPath(r.productId())).willReturn(serviceUnavailable()));
     sendCompleted(completed(r.requestId(), "ISSUED", cardId, null));
-    await().atMost(Duration.ofSeconds(15)).until(() -> "ISSUED".equals(requestStatus(r.requestId())));
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(() -> "ISSUED".equals(requestStatus(r.requestId())));
 
     overview(r.cardholderId())
         .andExpect(status().isOk())
@@ -341,10 +358,14 @@ class RegistrationIT {
             .content(
                 objectMapper.writeValueAsString(
                     Map.of(
-                        "cpf", cpf,
-                        "fullName", name,
-                        "birthDate", birthDate.toString(),
-                        "productId", productId.toString()))));
+                        "cpf",
+                        cpf,
+                        "fullName",
+                        name,
+                        "birthDate",
+                        birthDate.toString(),
+                        "productId",
+                        productId.toString()))));
   }
 
   private ResultActions overview(UUID cardholderId) throws Exception {
@@ -398,7 +419,8 @@ class RegistrationIT {
 
   private boolean dlqContains(String text) throws Exception {
     String url = sqs.getQueueUrl(b -> b.queueName(COMPLETED_DLQ)).get().queueUrl();
-    return sqs.receiveMessage(b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
+    return sqs
+        .receiveMessage(b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
         .get()
         .messages()
         .stream()
@@ -413,7 +435,8 @@ class RegistrationIT {
         .until(
             () -> {
               for (Message m :
-                  sqs.receiveMessage(b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
+                  sqs.receiveMessage(
+                          b -> b.queueUrl(url).waitTimeSeconds(1).maxNumberOfMessages(10))
                       .get()
                       .messages()) {
                 if (m.body().contains(requestId.toString())) {

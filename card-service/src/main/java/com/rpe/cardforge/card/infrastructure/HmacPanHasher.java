@@ -44,7 +44,8 @@ public class HmacPanHasher implements PanHasher {
     try {
       Mac mac = Mac.getInstance(ALGORITHM);
       mac.init(key);
-      return HexFormat.of().formatHex(mac.doFinal(pan.digits().getBytes(StandardCharsets.US_ASCII)));
+      return HexFormat.of()
+          .formatHex(mac.doFinal(pan.digits().getBytes(StandardCharsets.US_ASCII)));
     } catch (NoSuchAlgorithmException | InvalidKeyException e) {
       throw new IllegalStateException("HMAC unavailable", e);
     }

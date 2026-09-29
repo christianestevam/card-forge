@@ -19,8 +19,7 @@ class ProductObservationTest {
   @Test
   void activeWithinFiveMinutesInclusiveAuthorizes() {
     assertThat(observed(ProductState.ACTIVE, NOW).authorizesIssuanceAt(NOW, WINDOW)).isTrue();
-    assertThat(
-            observed(ProductState.ACTIVE, NOW.minus(WINDOW)).authorizesIssuanceAt(NOW, WINDOW))
+    assertThat(observed(ProductState.ACTIVE, NOW.minus(WINDOW)).authorizesIssuanceAt(NOW, WINDOW))
         .isTrue();
   }
 
@@ -35,8 +34,7 @@ class ProductObservationTest {
   @Test
   void canceledOrFutureObservationDoesNotAuthorize() {
     assertThat(observed(ProductState.CANCELED, NOW).authorizesIssuanceAt(NOW, WINDOW)).isFalse();
-    assertThat(
-            observed(ProductState.ACTIVE, NOW.plusSeconds(1)).authorizesIssuanceAt(NOW, WINDOW))
+    assertThat(observed(ProductState.ACTIVE, NOW.plusSeconds(1)).authorizesIssuanceAt(NOW, WINDOW))
         .isFalse();
   }
 }

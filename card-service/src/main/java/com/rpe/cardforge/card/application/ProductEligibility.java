@@ -113,6 +113,7 @@ public class ProductEligibility {
 
   private void degraded(String operation, RuntimeException e) {
     meters.counter("cardforge.product.cache", "result", "error").increment();
-    log.warn("Product cache degraded on {}; falling back to the catalog: {}", operation, e.toString());
+    log.warn(
+        "Product cache degraded on {}; falling back to the catalog: {}", operation, e.toString());
   }
 }

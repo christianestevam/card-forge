@@ -23,8 +23,8 @@ public class IssuanceResultService {
   }
 
   /**
-   * @throws UnprocessableResultException se a solicitação é desconhecida ou o resultado contradiz
-   *     o desfecho já aplicado (nada é alterado)
+   * @throws UnprocessableResultException se a solicitação é desconhecida ou o resultado contradiz o
+   *     desfecho já aplicado (nada é alterado)
    */
   @Transactional
   public void apply(IssuanceCompletedEvent event) {
@@ -47,7 +47,8 @@ public class IssuanceResultService {
         log.info("Issuance request {} is now {}", request.id(), request.status());
       }
       case ALREADY_APPLIED ->
-          log.info("Issuance request {} already {}; duplicate ignored", request.id(), request.status());
+          log.info(
+              "Issuance request {} already {}; duplicate ignored", request.id(), request.status());
       case CONTRADICTORY ->
           throw new UnprocessableResultException(
               "Contradictory result "

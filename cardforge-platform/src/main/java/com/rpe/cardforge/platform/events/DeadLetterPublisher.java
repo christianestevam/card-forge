@@ -41,8 +41,10 @@ public class DeadLetterPublisher {
                       .messageBody(originalBody)
                       .messageAttributes(
                           Map.of(
-                              CorrelationId.MESSAGE_ATTRIBUTE, attribute(CorrelationId.current()),
-                              "deadLetterReason", attribute(reason)))
+                              CorrelationId.MESSAGE_ATTRIBUTE,
+                              attribute(CorrelationId.current()),
+                              "deadLetterReason",
+                              attribute(reason)))
                       .overrideConfiguration(o -> o.apiCallTimeout(timeout)))
           .get(timeout.toMillis() + 1000, TimeUnit.MILLISECONDS);
     } catch (InterruptedException e) {

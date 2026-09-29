@@ -25,8 +25,7 @@ class ProductController {
   @PostMapping
   ResponseEntity<ProductResponse> create(@Valid @RequestBody CreateProductRequest request) {
     ProductResponse created =
-        ProductResponse.from(
-            products.create(request.name(), request.description(), request.bin()));
+        ProductResponse.from(products.create(request.name(), request.description(), request.bin()));
     return ResponseEntity.created(URI.create("/api/v1/products/" + created.id())).body(created);
   }
 

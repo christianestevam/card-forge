@@ -39,8 +39,7 @@ class ApplicationConfig {
                                         .scopes(
                                             new Scopes()
                                                 .addString("products:read", "Read products")
-                                                .addString(
-                                                    "products:write", "Create products"))))))
+                                                .addString("products:write", "Create products"))))))
         .addSecurityItem(new SecurityRequirement().addList("oauth2"));
   }
 }

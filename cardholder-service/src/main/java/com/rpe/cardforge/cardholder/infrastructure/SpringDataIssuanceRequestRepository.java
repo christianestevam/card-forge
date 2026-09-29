@@ -14,5 +14,6 @@ interface SpringDataIssuanceRequestRepository
   @Query("select r from IssuanceRequestJpaEntity r where r.id = :id")
   Optional<IssuanceRequestJpaEntity> findByIdForUpdate(UUID id);
 
-  Optional<IssuanceRequestJpaEntity> findFirstByCardholderIdOrderByRequestedAtDesc(UUID cardholderId);
+  Optional<IssuanceRequestJpaEntity> findFirstByCardholderIdOrderByRequestedAtDesc(
+      UUID cardholderId);
 }

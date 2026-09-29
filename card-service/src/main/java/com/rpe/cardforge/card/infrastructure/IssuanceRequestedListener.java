@@ -19,8 +19,8 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 /**
- * Consumidor de {@code card-issuance-requested}. A mensagem só é confirmada quando o método
- * termina sem exceção, isto é, depois do commit do resultado.
+ * Consumidor de {@code card-issuance-requested}. A mensagem só é confirmada quando o método termina
+ * sem exceção, isto é, depois do commit do resultado.
  *
  * <ul>
  *   <li>Negócio (produto inexistente ou cancelado): FAILED gravado, confirma, sem retry.
@@ -57,7 +57,9 @@ class IssuanceRequestedListener {
   void onMessage(
       String body,
       Visibility visibility,
-      @Header(name = SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT, required = false)
+      @Header(
+              name = SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT,
+              required = false)
           String receiveCount,
       @Header(name = CorrelationId.MESSAGE_ATTRIBUTE, required = false) String correlationId) {
     try (CorrelationId.Scope ignored = CorrelationId.open(correlationId)) {

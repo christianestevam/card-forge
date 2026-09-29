@@ -133,7 +133,8 @@ class IssuanceIT {
     assertThat(correlationOfCompletedEvent(r)).isEqualTo("corr-happy");
 
     JsonNode cached =
-        objectMapper.readTree(redisTemplate.opsForValue().get("cardforge:product:v1:" + r.productId()));
+        objectMapper.readTree(
+            redisTemplate.opsForValue().get("cardforge:product:v1:" + r.productId()));
     assertThat(cached.get("status").asText()).isEqualTo("ACTIVE");
     assertThat(cached.get("validatedAt").asText()).isNotBlank();
 
@@ -303,12 +304,15 @@ class IssuanceIT {
     String marker = "garbage-" + UUID.randomUUID();
     send("{\"eventType\":\"" + marker + "\"}", "corr-invalid");
 
-    String dlqUrl = sqs.getQueueUrl(b -> b.queueName("card-issuance-requested-dlq")).get().queueUrl();
+    String dlqUrl =
+        sqs.getQueueUrl(b -> b.queueName("card-issuance-requested-dlq")).get().queueUrl();
     await()
         .atMost(Duration.ofSeconds(15))
         .until(
             () ->
-                sqs.receiveMessage(b -> b.queueUrl(dlqUrl).waitTimeSeconds(1).maxNumberOfMessages(10))
+                sqs
+                    .receiveMessage(
+                        b -> b.queueUrl(dlqUrl).waitTimeSeconds(1).maxNumberOfMessages(10))
                     .get()
                     .messages()
                     .stream()
@@ -367,11 +371,13 @@ class IssuanceIT {
   private static String product(UUID productId, String status) {
     String bin = String.valueOf(ThreadLocalRandom.current().nextInt(10_000_000, 99_999_999));
     return """
-        {"id":"%s","name":"Gold","bin":"%s","status":"%s"}""".formatted(productId, bin, status);
+        {"id":"%s","name":"Gold","bin":"%s","status":"%s"}"""
+        .formatted(productId, bin, status);
   }
 
   private void stubProduct(UUID productId, String status) {
-    catalog.stubFor(get(urlEqualTo(productPath(productId))).willReturn(okJson(product(productId, status))));
+    catalog.stubFor(
+        get(urlEqualTo(productPath(productId))).willReturn(okJson(product(productId, status))));
   }
 
   private void cache(UUID productId, String status, Instant validatedAt) throws Exception {
@@ -381,11 +387,16 @@ class IssuanceIT {
             "cardforge:product:v1:" + productId,
             objectMapper.writeValueAsString(
                 Map.of(
-                    "productId", productId,
-                    "name", "Gold",
-                    "bin", "12345678",
-                    "status", status,
-                    "validatedAt", validatedAt.toString())));
+                    "productId",
+                    productId,
+                    "name",
+                    "Gold",
+                    "bin",
+                    "12345678",
+                    "status",
+                    status,
+                    "validatedAt",
+                    validatedAt.toString())));
   }
 
   private List<LoggedRequest> catalogCalls(String path) {
@@ -397,8 +408,7 @@ class IssuanceIT {
         .atMost(Duration.ofSeconds(20))
         .until(
             () ->
-                jdbc.sql(
-                        "SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
                     .param(r.issuanceRequestId())
                     .query(String.class)
                     .optional()
@@ -433,7 +443,8 @@ class IssuanceIT {
   }
 
   private List<JsonNode> completedEvents(Request r) {
-    return jdbc.sql(
+    return jdbc
+        .sql(
             """
             SELECT payload::text FROM outbox_events
             WHERE event_type = 'IssuanceCompleted' AND payload->>'issuanceRequestId' = ?

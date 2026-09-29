@@ -6,8 +6,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Observação do produto feita no catálogo em {@code validatedAt}. Autoriza emissão só se for
- * ACTIVE e tiver no máximo a janela de elegibilidade (5 minutos, inclusivo) (BR4.1).
+ * Observação do produto feita no catálogo em {@code validatedAt}. Autoriza emissão só se for ACTIVE
+ * e tiver no máximo a janela de elegibilidade (5 minutos, inclusivo) (BR4.1).
  */
 public record ProductObservation(
     UUID productId, String name, String bin, ProductState status, Instant validatedAt) {

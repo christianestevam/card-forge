@@ -28,8 +28,7 @@ public record IssuanceDecision(
     return new IssuanceDecision(issuanceRequestId, IssuanceStatus.ISSUED, cardId, null, now);
   }
 
-  public static IssuanceDecision failed(
-      UUID issuanceRequestId, FailureReason reason, Instant now) {
+  public static IssuanceDecision failed(UUID issuanceRequestId, FailureReason reason, Instant now) {
     return new IssuanceDecision(issuanceRequestId, IssuanceStatus.FAILED, null, reason, now);
   }
 }

@@ -103,7 +103,8 @@ public class IssuanceProcessor {
             return;
           }
           UUID cardId = UUID.randomUUID();
-          IssuanceDecision decision = IssuanceDecision.issued(request.issuanceRequestId(), cardId, now);
+          IssuanceDecision decision =
+              IssuanceDecision.issued(request.issuanceRequestId(), cardId, now);
           if (!processing.insertIfAbsent(decision)) {
             republishExisting(request.issuanceRequestId());
             return;
@@ -151,7 +152,8 @@ public class IssuanceProcessor {
     IssuanceDecision existing =
         processing
             .find(issuanceRequestId)
-            .orElseThrow(() -> new IllegalStateException("Decision vanished for " + issuanceRequestId));
+            .orElseThrow(
+                () -> new IllegalStateException("Decision vanished for " + issuanceRequestId));
     publish(existing);
   }
 
@@ -170,6 +172,11 @@ public class IssuanceProcessor {
   }
 
   private void countDecision(IssuanceDecision decision) {
+    log.info(
+        "Issuance request {} decided {}{}",
+        decision.issuanceRequestId(),
+        decision.status(),
+        decision.failureReason() == null ? "" : " (" + decision.failureReason() + ")");
     meters
         .counter(
             "cardforge.issuance.decisions",

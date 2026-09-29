@@ -14,7 +14,8 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
-    try (CorrelationId.Scope ignored = CorrelationId.open(request.getHeader(CorrelationId.HEADER))) {
+    try (CorrelationId.Scope ignored =
+        CorrelationId.open(request.getHeader(CorrelationId.HEADER))) {
       response.setHeader(CorrelationId.HEADER, CorrelationId.current());
       chain.doFilter(request, response);
     }

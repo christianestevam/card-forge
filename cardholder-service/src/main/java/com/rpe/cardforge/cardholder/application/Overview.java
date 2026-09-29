@@ -6,8 +6,8 @@ import com.rpe.cardforge.cardholder.domain.IssuanceRequest;
 import java.time.Instant;
 
 /**
- * Consulta consolidada: separa o estado de negócio ({@code issuance.status}) da completude de
- * cada parte ({@code availability}).
+ * Consulta consolidada: separa o estado de negócio ({@code issuance.status}) da completude de cada
+ * parte ({@code availability}).
  */
 public record Overview(
     Cardholder cardholder, IssuanceRequest issuance, CardPart card, ProductPart product) {

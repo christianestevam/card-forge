@@ -72,10 +72,7 @@ class OutboxRelayIT {
 
     List<Message> messages =
         sqs.receiveMessage(
-                b ->
-                    b.queueUrl(queueUrl)
-                        .waitTimeSeconds(5)
-                        .messageAttributeNames("All"))
+                b -> b.queueUrl(queueUrl).waitTimeSeconds(5).messageAttributeNames("All"))
             .get()
             .messages();
     assertThat(messages).hasSize(1);

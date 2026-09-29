@@ -14,8 +14,7 @@ import com.tngtech.archunit.lang.ArchRule;
 class PlatformArchitectureTest {
 
   @ArchTest
-  static final ArchRule noDomainPackages =
-      noClasses().should().resideInAPackage("..domain..");
+  static final ArchRule noDomainPackages = noClasses().should().resideInAPackage("..domain..");
 
   @ArchTest
   static final ArchRule noServiceDependencies =

@@ -20,8 +20,8 @@ import org.springframework.security.oauth2.core.http.converter.OAuth2AccessToken
 import org.springframework.web.client.RestClient;
 
 /**
- * Chamadas entre serviços com token de client credentials. Toda chamada, inclusive a do endpoint
- * de token, tem connect timeout e read timeout explícitos.
+ * Chamadas entre serviços com token de client credentials. Toda chamada, inclusive a do endpoint de
+ * token, tem connect timeout e read timeout explícitos.
  */
 public final class ClientCredentialsSupport {
 

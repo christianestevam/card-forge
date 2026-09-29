@@ -51,7 +51,10 @@ public class PlatformExceptionHandler extends ResponseEntityExceptionHandler {
     return ResponseEntity.badRequest()
         .body(
             Problems.of(
-                HttpStatus.BAD_REQUEST, Problems.INVALID_HEADER, "Invalid header", ex.getMessage()));
+                HttpStatus.BAD_REQUEST,
+                Problems.INVALID_HEADER,
+                "Invalid header",
+                ex.getMessage()));
   }
 
   @ExceptionHandler(Exception.class)

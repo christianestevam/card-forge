@@ -41,7 +41,8 @@ class LuhnAndPanTest {
   @Test
   void rejectsInvalidBinAndPan() {
     PanGenerator generator = new PanGenerator(() -> 1);
-    assertThatThrownBy(() -> generator.generate("1234")).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> generator.generate("1234"))
+        .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> new Pan("4111111111111112"))
         .isInstanceOf(IllegalArgumentException.class);
   }

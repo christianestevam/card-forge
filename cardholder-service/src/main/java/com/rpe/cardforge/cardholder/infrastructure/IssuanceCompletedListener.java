@@ -16,8 +16,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Consumidor de {@code card-issuance-completed}: confirma só depois de persistir. Resultado
- * contraditório, solicitação desconhecida ou mensagem inválida gera alerta e vai de forma
- * explícita e imediata para a DLQ, preservando a mensagem original.
+ * contraditório, solicitação desconhecida ou mensagem inválida gera alerta e vai de forma explícita
+ * e imediata para a DLQ, preservando a mensagem original.
  */
 @Component
 class IssuanceCompletedListener {
