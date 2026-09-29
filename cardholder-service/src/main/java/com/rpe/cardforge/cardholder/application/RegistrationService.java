@@ -6,11 +6,13 @@ import com.rpe.cardforge.cardholder.application.ProductCatalog.Found;
 import com.rpe.cardforge.cardholder.application.ProductCatalog.NotFound;
 import com.rpe.cardforge.cardholder.domain.Cardholder;
 import com.rpe.cardforge.cardholder.domain.IssuanceRequest;
+import com.rpe.cardforge.cardholder.domain.ProductObservation;
 import com.rpe.cardforge.platform.outbox.OutboxWriter;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,10 +43,12 @@ public class RegistrationService {
   private final TransactionTemplate transaction;
   private final Clock clock;
   private final CardholderProperties properties;
+  private final ProductObservationRepository observations;
 
   public RegistrationService(
       CardholderRepository cardholders,
       IssuanceRequestRepository requests,
+      ProductObservationRepository observations,
       ProductCatalog catalog,
       OutboxWriter outbox,
       TransactionTemplate transaction,
@@ -52,6 +56,7 @@ public class RegistrationService {
       CardholderProperties properties) {
     this.cardholders = cardholders;
     this.requests = requests;
+    this.observations = observations;
     this.catalog = catalog;
     this.outbox = outbox;
     this.transaction = transaction;
@@ -72,7 +77,7 @@ public class RegistrationService {
             today,
             now);
 
-    checkProduct(cardholder.productId());
+    Optional<ProductObservation> observation = checkProduct(cardholder.productId(), now);
 
     IssuanceRequest request =
         IssuanceRequest.pending(UUID.randomUUID(), cardholder.id(), cardholder.productId(), now);
@@ -80,6 +85,7 @@ public class RegistrationService {
         status -> {
           cardholders.insert(cardholder);
           requests.insert(request);
+          observation.ifPresent(observations::saveIfNewer);
           outbox.write(
               properties.requestedQueue(),
               IssuanceRequestedEvent.EVENT_TYPE,
@@ -92,15 +98,20 @@ public class RegistrationService {
     return new RegistrationReceipt(cardholder.id(), request.id());
   }
 
-  private void checkProduct(UUID productId) {
+  /**
+   * @return a observação ACTIVE feita agora, ou vazio se o catálogo não respondeu
+   */
+  private Optional<ProductObservation> checkProduct(UUID productId, Instant observedAt) {
     try {
-      switch (catalog.lookup(productId)) {
+      return switch (catalog.lookup(productId)) {
         case NotFound notFound -> throw new ProductRejectedException(false);
         case Found found when found.isCanceled() -> throw new ProductRejectedException(true);
-        case Found found -> {
-          // ACTIVE: segue. A decisão final de emissão é do card-service (BR4.1).
-        }
-      }
+        // ACTIVE: segue. A decisão final de emissão é do card-service (BR4.1).
+        case Found found ->
+            Optional.of(
+                new ProductObservation(
+                    found.id(), found.name(), found.bin(), found.status(), observedAt));
+      };
     } catch (CatalogUnavailableException e) {
       log.warn(
           "Product catalog unavailable; registration accepted and product check deferred to"
@@ -112,5 +123,6 @@ public class RegistrationService {
               + " accepted: {}",
           e.getMessage());
     }
+    return Optional.empty();
   }
 }

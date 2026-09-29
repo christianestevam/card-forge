@@ -325,12 +325,12 @@ class RegistrationIT {
         .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
         .andExpect(jsonPath("$.card.availability").value("UNAVAILABLE"))
         .andExpect(jsonPath("$.card.data").doesNotExist())
-        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+        .andExpect(jsonPath("$.product.availability").value("STALE"));
   }
 
-  /** Catálogo offline: produto UNAVAILABLE, o restante da consulta segue completo. */
+  /** Catálogo offline: produto STALE (observação do cadastro), o restante segue completo. */
   @Test
-  void overviewWithCatalogOfflineKeepsCardAndMarksProductUnavailable() throws Exception {
+  void overviewWithCatalogOfflineKeepsCardAndMarksProductStale() throws Exception {
     Registered r = registerActive();
     UUID cardId = issueWithCard(r, id -> okJson(cardJson(id)));
     remote.stubFor(get(productPath(r.productId())).willReturn(serviceUnavailable()));
@@ -340,14 +340,15 @@ class RegistrationIT {
         .andExpect(jsonPath("$.issuance.status").value("ISSUED"))
         .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
         .andExpect(jsonPath("$.card.availability").value("AVAILABLE"))
-        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"))
-        .andExpect(jsonPath("$.product.data").doesNotExist())
+        .andExpect(jsonPath("$.product.availability").value("STALE"))
+        .andExpect(jsonPath("$.product.observedAt").isNotEmpty())
+        .andExpect(jsonPath("$.product.data.status").value("ACTIVE"))
         .andExpect(jsonPath("$.cardholder.id").value(r.cardholderId().toString()));
   }
 
   /** Catálogo com timeout: mesma degradação, dentro do orçamento de latência. */
   @Test
-  void overviewWithCatalogTimeoutMarksProductUnavailable() throws Exception {
+  void overviewWithCatalogTimeoutMarksProductStale() throws Exception {
     Registered r = registerActive();
     remote.stubFor(get(productPath(r.productId())).willReturn(okJson("{}").withFixedDelay(3000)));
 
@@ -355,7 +356,7 @@ class RegistrationIT {
     overview(r.cardholderId())
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.issuance.status").value("PENDING"))
-        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+        .andExpect(jsonPath("$.product.availability").value("STALE"));
     assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
   }
 
@@ -451,6 +452,98 @@ class RegistrationIT {
     return mvc.perform(
         MockMvcRequestBuilders.post("/api/v1/cardholders/" + cardholderId + "/" + action)
             .with(scopes("cardholders:write")));
+  }
+
+  /**
+   * TC8: a consulta consolidada distingue ausência esperada, desfecho de negócio, indisponibilidade
+   * e dado desatualizado, sempre com 200 e por campos estruturados.
+   */
+  @Test
+  void consolidatedViewDistinguishesTheFiveCases() throws Exception {
+    // 1. Pendente: ausência esperada do cartão; produto atual.
+    Registered pending = registerActive();
+    overview(pending.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("PENDING"))
+        .andExpect(jsonPath("$.issuance.requestedAt").isNotEmpty())
+        .andExpect(jsonPath("$.card.availability").value("NOT_APPLICABLE"))
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"));
+
+    // 2. Falha de negócio: FAILED com motivo; o card-service não é chamado.
+    Registered failed = registerActive();
+    sendCompleted(completed(failed.requestId(), "FAILED", null, "PRODUCT_CANCELED"));
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(() -> "FAILED".equals(requestStatus(failed.requestId())));
+    overview(failed.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("FAILED"))
+        .andExpect(jsonPath("$.issuance.failureReason").value("PRODUCT_CANCELED"))
+        .andExpect(jsonPath("$.issuance.decidedAt").isNotEmpty())
+        .andExpect(jsonPath("$.card.availability").value("NOT_APPLICABLE"));
+
+    // 3. Emitido com o card-service fora: ISSUED e cardId mantidos, detalhes indisponíveis.
+    Registered issued = registerActive();
+    UUID cardId = issueWithCard(issued, id -> aResponse().withStatus(503));
+    overview(issued.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("ISSUED"))
+        .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
+        .andExpect(jsonPath("$.card.availability").value("UNAVAILABLE"));
+
+    // 4. Produto desatualizado: catálogo fora, última observação sinalizada com o instante dela.
+    Registered stale = registerActive();
+    java.time.Instant observedAtRegistration =
+        jdbc.sql("SELECT observed_at FROM product_observations WHERE product_id = ?")
+            .param(stale.productId())
+            .query(java.sql.Timestamp.class)
+            .single()
+            .toInstant();
+    remote.stubFor(get(productPath(stale.productId())).willReturn(serviceUnavailable()));
+    String body =
+        overview(stale.cardholderId())
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.product.availability").value("STALE"))
+            .andExpect(jsonPath("$.product.data.id").value(stale.productId().toString()))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(java.time.Instant.parse(JsonPath.read(body, "$.product.observedAt")))
+        .isEqualTo(observedAtRegistration);
+
+    // 5. Produto sem observação: cadastro e consulta com o catálogo fora.
+    UUID unknownProduct = UUID.randomUUID();
+    remote.stubFor(get(productPath(unknownProduct)).willReturn(serviceUnavailable()));
+    String receipt =
+        register(TestCpfs.random(), "Maria da Silva", LocalDate.of(1990, 5, 20), unknownProduct)
+            .andExpect(status().isAccepted())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    overview(UUID.fromString(JsonPath.read(receipt, "$.cardholderId")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.product.observedAt").doesNotExist())
+        .andExpect(jsonPath("$.product.data").doesNotExist());
+  }
+
+  /** Uma consulta bem-sucedida atualiza a observação; uma falha posterior mostra a mais recente. */
+  @Test
+  void successfulOverviewRefreshesTheStoredObservation() throws Exception {
+    Registered r = registerActive();
+    java.time.Instant atRegistration = observedAt(r.productId());
+
+    overview(r.cardholderId()).andExpect(jsonPath("$.product.availability").value("CURRENT"));
+
+    assertThat(observedAt(r.productId())).isAfter(atRegistration);
+  }
+
+  private java.time.Instant observedAt(UUID productId) {
+    return jdbc.sql("SELECT observed_at FROM product_observations WHERE product_id = ?")
+        .param(productId)
+        .query(java.sql.Timestamp.class)
+        .single()
+        .toInstant();
   }
 
   @Test
