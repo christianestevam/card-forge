@@ -15,4 +15,10 @@ public interface ProductRepository {
   Product insert(Product product);
 
   Optional<Product> findById(UUID id);
+
+  /** Lê com lock de escrita, para aplicar mudanças concorrentes em série. */
+  Optional<Product> findByIdForUpdate(UUID id);
+
+  /** Grava nome, descrição, status e {@code updatedAt}; o BIN nunca muda. */
+  Product update(Product product);
 }

@@ -39,6 +39,17 @@ public final class Product {
     return new Product(id, name, description, bin, ProductStatus.ACTIVE, now, now, null);
   }
 
+  /**
+   * ACTIVE -> CANCELED (BR1.2). Cancelar um produto já cancelado devolve o próprio produto, sem
+   * mudança (contrato C1, idempotente).
+   */
+  public Product cancel(Instant now) {
+    if (status == ProductStatus.CANCELED) {
+      return this;
+    }
+    return new Product(id, name, description, bin, ProductStatus.CANCELED, createdAt, now, version);
+  }
+
   public UUID id() {
     return id;
   }

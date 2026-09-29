@@ -55,6 +55,13 @@ class ProductJpaEntity {
     this.version = version;
   }
 
+  void apply(String name, String description, String status, Instant updatedAt) {
+    this.name = name;
+    this.description = description;
+    this.status = status;
+    this.updatedAt = updatedAt;
+  }
+
   UUID getId() {
     return id;
   }

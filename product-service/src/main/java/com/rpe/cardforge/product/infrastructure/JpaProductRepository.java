@@ -39,6 +39,21 @@ class JpaProductRepository implements ProductRepository {
     return jpa.findById(id).map(JpaProductRepository::toDomain);
   }
 
+  @Override
+  public Optional<Product> findByIdForUpdate(UUID id) {
+    return jpa.findByIdForUpdate(id).map(JpaProductRepository::toDomain);
+  }
+
+  @Override
+  public Product update(Product product) {
+    ProductJpaEntity entity =
+        jpa.findById(product.id())
+            .orElseThrow(() -> new IllegalStateException("Missing product " + product.id()));
+    entity.apply(
+        product.name(), product.description(), product.status().name(), product.updatedAt());
+    return toDomain(jpa.saveAndFlush(entity));
+  }
+
   private static ProductJpaEntity toEntity(Product p) {
     return new ProductJpaEntity(
         p.id(),

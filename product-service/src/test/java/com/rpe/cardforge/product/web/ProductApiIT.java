@@ -130,6 +130,37 @@ class ProductApiIT {
   }
 
   @Test
+  void cancelsProductAndRepeatedCancelIsIdempotent() throws Exception {
+    String id = createProduct(randomBin());
+
+    String first =
+        mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELED"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"))
+        .andExpect(jsonPath("$.updatedAt").value((String) JsonPath.read(first, "$.updatedAt")));
+
+    mvc.perform(withScopes(get("/api/v1/products/" + id), "products:read"))
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+  }
+
+  @Test
+  void cancelRequiresWriteScopeAndExistingProduct() throws Exception {
+    mvc.perform(
+            withScopes(post("/api/v1/products/" + UUID.randomUUID() + "/cancel"), "products:read"))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            withScopes(post("/api/v1/products/" + UUID.randomUUID() + "/cancel"), "products:write"))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
         .andExpect(status().isMethodNotAllowed());

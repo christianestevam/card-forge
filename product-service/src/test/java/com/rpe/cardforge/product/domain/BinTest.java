@@ -31,4 +31,17 @@ class BinTest {
     assertThat(product.status()).isEqualTo(ProductStatus.ACTIVE);
     assertThat(product.createdAt()).isEqualTo(now).isEqualTo(product.updatedAt());
   }
+
+  @Test
+  void cancelIsTerminalAndIdempotent() {
+    Instant now = Instant.parse("2026-09-29T10:00:00Z");
+    Product active = Product.create(UUID.randomUUID(), "Gold", null, new Bin("12345678"), now);
+
+    Product canceled = active.cancel(now.plusSeconds(60));
+
+    assertThat(canceled.status()).isEqualTo(ProductStatus.CANCELED);
+    assertThat(canceled.updatedAt()).isEqualTo(now.plusSeconds(60));
+    assertThat(canceled.bin()).isEqualTo(active.bin());
+    assertThat(canceled.cancel(now.plusSeconds(120))).isSameAs(canceled);
+  }
 }

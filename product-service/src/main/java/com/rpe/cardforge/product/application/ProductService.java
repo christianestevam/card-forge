@@ -26,6 +26,15 @@ public class ProductService {
     return repository.insert(product);
   }
 
+  /** Cancela o produto; novas emissões param em até 5 minutos (BR1.3). */
+  @Transactional
+  public Product cancel(UUID id) {
+    Product current =
+        repository.findByIdForUpdate(id).orElseThrow(() -> new ProductNotFoundException(id));
+    Product canceled = current.cancel(clock.instant());
+    return canceled == current ? current : repository.update(canceled);
+  }
+
   @Transactional(readOnly = true)
   public Product get(UUID id) {
     return repository.findById(id).orElseThrow(() -> new ProductNotFoundException(id));

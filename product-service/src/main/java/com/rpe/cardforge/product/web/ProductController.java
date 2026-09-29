@@ -33,4 +33,10 @@ class ProductController {
   ProductResponse get(@PathVariable UUID productId) {
     return ProductResponse.from(products.get(productId));
   }
+
+  /** ACTIVE -> CANCELED; 200 sem mudança se o produto já estiver CANCELED (contrato C1). */
+  @PostMapping("/{productId}/cancel")
+  ProductResponse cancel(@PathVariable UUID productId) {
+    return ProductResponse.from(products.cancel(productId));
+  }
 }
