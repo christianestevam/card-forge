@@ -44,4 +44,20 @@ class BinTest {
     assertThat(canceled.bin()).isEqualTo(active.bin());
     assertThat(canceled.cancel(now.plusSeconds(120))).isSameAs(canceled);
   }
+
+  @Test
+  void describeChangesOnlyNameAndDescriptionOfActiveProduct() {
+    Instant now = Instant.parse("2026-09-29T10:00:00Z");
+    Product active = Product.create(UUID.randomUUID(), "Gold", "Old", new Bin("12345678"), now);
+
+    Product updated = active.describe("Platinum", null, now.plusSeconds(5));
+
+    assertThat(updated.name()).isEqualTo("Platinum");
+    assertThat(updated.description()).isNull();
+    assertThat(updated.bin()).isEqualTo(active.bin());
+    assertThat(updated.updatedAt()).isEqualTo(now.plusSeconds(5));
+    assertThat(active.describe("Gold", "Old", now.plusSeconds(9))).isSameAs(active);
+    assertThatThrownBy(() -> active.cancel(now).describe("X", null, now))
+        .isInstanceOf(ProductCanceledException.class);
+  }
 }

@@ -188,6 +188,75 @@ class ProductApiIT {
   }
 
   @Test
+  void updatesNameAndDescriptionKeepingBin() throws Exception {
+    String bin = randomBin();
+    String id = createProduct(bin);
+
+    patch(id, "{\"name\":\"Platinum\",\"description\":\"Upgraded\"}")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("Platinum"))
+        .andExpect(jsonPath("$.description").value("Upgraded"))
+        .andExpect(jsonPath("$.bin").value(bin));
+
+    patch(id, "{\"description\":null}")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("Platinum"))
+        .andExpect(jsonPath("$.description").doesNotExist());
+  }
+
+  @Test
+  void binInUpdateIsRejectedAndNeverIgnored() throws Exception {
+    String bin = randomBin();
+    String id = createProduct(bin);
+
+    patch(id, "{\"name\":\"Platinum\",\"bin\":\"%s\"}".formatted(randomBin()))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/bin-immutable"));
+    patch(id, "{\"bin\":null}")
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/bin-immutable"));
+
+    mvc.perform(withScopes(get("/api/v1/products/" + id), "products:read"))
+        .andExpect(jsonPath("$.name").value("Gold"))
+        .andExpect(jsonPath("$.bin").value(bin));
+  }
+
+  @Test
+  void canceledProductIsReadOnly() throws Exception {
+    String id = createProduct(randomBin());
+    mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+        .andExpect(status().isOk());
+
+    patch(id, "{\"name\":\"Too late\"}")
+        .andExpect(status().isConflict())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/product-canceled-read-only"));
+  }
+
+  @Test
+  void invalidUpdateValuesAreUnprocessableAndWrongTypesAreBadRequest() throws Exception {
+    String id = createProduct(randomBin());
+
+    patch(id, "{\"name\":\" \",\"description\":\"%s\"}".formatted("x".repeat(501)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.invalidFields.length()").value(2));
+    patch(id, "{\"name\":123}").andExpect(status().isBadRequest());
+    patch(UUID.randomUUID().toString(), "{\"name\":\"Any\"}").andExpect(status().isNotFound());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions patch(String id, String body)
+      throws Exception {
+    return mvc.perform(
+        withScopes(
+                org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                    "/api/v1/products/" + id),
+                "products:write")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body));
+  }
+
+  @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
         .andExpect(status().isMethodNotAllowed());

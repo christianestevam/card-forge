@@ -1,5 +1,6 @@
 package com.rpe.cardforge.product.web;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.rpe.cardforge.platform.paging.PageMetadata;
 import com.rpe.cardforge.product.application.ProductService;
 import jakarta.validation.Valid;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -48,6 +50,16 @@ class ProductController {
   @GetMapping("/{productId}")
   ProductResponse get(@PathVariable UUID productId) {
     return ProductResponse.from(products.get(productId));
+  }
+
+  /**
+   * Atualiza nome e descrição de produto ACTIVE. {@code bin} no corpo gera 422 bin-immutable;
+   * produto CANCELED gera 409 product-canceled-read-only.
+   */
+  @PatchMapping("/{productId}")
+  ProductResponse update(@PathVariable UUID productId, @RequestBody JsonNode body) {
+    ProductUpdate update = ProductUpdate.parse(body);
+    return ProductResponse.from(products.update(productId, update.name(), update.description()));
   }
 
   /** ACTIVE -> CANCELED; 200 sem mudança se o produto já estiver CANCELED (contrato C1). */
