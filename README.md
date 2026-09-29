@@ -94,6 +94,8 @@ flowchart LR
 
 ## Decisões técnicas
 
+Os ADRs completos estão em [`docs/adr/`](docs/adr/README.md). Esta seção resume as decisões centrais.
+
 ### Estratégia de cache: janela de 5 minutos
 
 O `card-service` é a única autoridade sobre "o produto pode emitir agora?" (`ProductEligibility`).
@@ -229,7 +231,6 @@ Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
 - **Métricas de ocupação do BIN (alerta em 70%) e profundidade das filas:** não implementadas.
-- **ADRs em `docs/adr/`:** as decisões estão neste README e nos artefatos do AI-DLC (`aidlc/spaces/default/intents/260928-cardforge-release-1/`). Os ADRs de cache, retry/DLQ, outbox e idempotência ficam como débito.
 - **FR4.8:** a emissão não depende do status do portador. Um portador bloqueado ou cancelado depois do cadastro ainda recebe o cartão pendente, até a cascata de status da R1.1.
 - **Spring Boot 3.5.x** está fora do suporte OSS desde junho de 2026 (diretriz da plataforma). A migração para 4.x é débito registrado.
 - **Os logs de erro do Spring Cloud AWS** incluem o stack trace a cada falha técnica retentada. É ruído, não perda: a mensagem volta após o backoff.
