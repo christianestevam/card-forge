@@ -52,7 +52,9 @@ No Swagger UI, use **Authorize** com o mesmo `client_id` e `client_secret`.
 
    A collection também roda por linha de comando: `npx newman run postman/cardforge.postman_collection.json -e postman/cardforge-local.postman_environment.json`.
 3. **SQS fora durante o cadastro:** `docker compose pause localstack`, cadastre um portador (responde **202**; o `/overview` mostra `PENDING`), depois `docker compose unpause localstack`. O evento sai do outbox e o cartão é emitido.
-4. **Catálogo fora:** `docker compose stop product-service`. O cadastro continua sendo aceito, e o `/overview` mostra o produto `STALE` com o instante da última observação. Com `docker compose start product-service`, as emissões retidas saem após o backoff (até 5 minutos).
+4. **Catálogo fora:** `docker compose stop product-service`. O cadastro continua sendo aceito, e o `/overview` mostra o produto `STALE` com o instante da última observação.
+   - Se o `card-service` observou o produto há menos de 5 minutos, a emissão continua normalmente, pelo cache.
+   - Depois disso, as novas emissões ficam retidas com backoff. Com `docker compose start product-service`, elas saem em até 5 minutos.
 5. **card-service fora:** `docker compose stop card-service`. O `/overview` de um portador com cartão emitido responde 200 com `issuance.status = ISSUED` e `card.availability = UNAVAILABLE`.
 
 ## Matriz do enunciado
