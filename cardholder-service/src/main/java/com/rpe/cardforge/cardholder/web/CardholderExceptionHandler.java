@@ -4,6 +4,7 @@ import com.rpe.cardforge.cardholder.application.CardholderNotFoundException;
 import com.rpe.cardforge.cardholder.application.CpfAlreadyRegisteredException;
 import com.rpe.cardforge.cardholder.application.ProductRejectedException;
 import com.rpe.cardforge.cardholder.domain.CardholderValidationException;
+import com.rpe.cardforge.cardholder.domain.InvalidStatusTransitionException;
 import com.rpe.cardforge.platform.problem.InvalidField;
 import com.rpe.cardforge.platform.problem.Problems;
 import org.springframework.core.Ordered;
@@ -52,5 +53,14 @@ class CardholderExceptionHandler {
   @ExceptionHandler(CardholderNotFoundException.class)
   ProblemDetail notFound(CardholderNotFoundException ex) {
     return Problems.notFound(ex.getMessage());
+  }
+
+  @ExceptionHandler(InvalidStatusTransitionException.class)
+  ProblemDetail invalidTransition(InvalidStatusTransitionException ex) {
+    return Problems.of(
+        HttpStatus.CONFLICT,
+        "invalid-status-transition",
+        "Invalid status transition",
+        ex.getMessage());
   }
 }

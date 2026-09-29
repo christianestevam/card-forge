@@ -19,19 +19,25 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import com.rpe.cardforge.card.domain.RandomDigits;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -105,6 +111,33 @@ class IssuanceIT {
     registry.add("pan-hmac-key", () -> Base64.getEncoder().encodeToString(new byte[32]));
   }
 
+  /** Fonte de dígitos roteirizável, para forçar colisões de PAN (TC-PAN). */
+  @TestConfiguration
+  static class ScriptedDigitsConfig {
+    @Bean
+    @Primary
+    ScriptedDigits scriptedDigits() {
+      return new ScriptedDigits();
+    }
+  }
+
+  static class ScriptedDigits implements RandomDigits {
+    private final Deque<Integer> script = new ConcurrentLinkedDeque<>();
+
+    void enqueue(String digits) {
+      digits.chars().forEach(c -> script.add(c - '0'));
+    }
+
+    @Override
+    public int nextDigit() {
+      Integer next = script.poll();
+      return next != null ? next : ThreadLocalRandom.current().nextInt(10);
+    }
+  }
+
+  @Autowired ScriptedDigits digits;
+  @Autowired com.rpe.cardforge.card.infrastructure.BinOccupancyMetrics binOccupancy;
+  @Autowired io.micrometer.core.instrument.MeterRegistry meters;
   @Autowired SqsAsyncClient sqs;
   @Autowired JdbcClient jdbc;
   @Autowired StringRedisTemplate redisTemplate;
@@ -238,6 +271,38 @@ class IssuanceIT {
     assertThat(failureReason(r)).isEqualTo("PRODUCT_NOT_FOUND");
   }
 
+  /**
+   * TC-PAN: o segundo cartão sorteia o mesmo PAN do primeiro; o ON CONFLICT (pan_hmac) detecta a
+   * colisão, um novo candidato é gerado e cartão, resultado e outbox são gravados juntos.
+   */
+  @Test
+  void panCollisionIsResolvedWithANewCandidate() {
+    UUID productId = UUID.randomUUID();
+    stubProduct(productId, "ACTIVE");
+    Request first = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+    Request second = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+
+    digits.enqueue("1111111");
+    send(first.body(), "corr-pan-1");
+    UUID firstCard = awaitDecision(first, "ISSUED");
+
+    digits.enqueue("1111111"); // colide com o primeiro cartão
+    digits.enqueue("2222222");
+    send(second.body(), "corr-pan-2");
+    UUID secondCard = awaitDecision(second, "ISSUED");
+
+    Map<String, Object> a =
+        jdbc.sql("SELECT * FROM cards WHERE id = ?").param(firstCard).query().singleRow();
+    Map<String, Object> b =
+        jdbc.sql("SELECT * FROM cards WHERE id = ?").param(secondCard).query().singleRow();
+    assertThat((String) a.get("pan_last_four")).startsWith("111");
+    assertThat((String) b.get("pan_last_four")).startsWith("222");
+    assertThat(b.get("pan_hmac")).isNotEqualTo(a.get("pan_hmac"));
+    assertThat(b.get("issuance_request_id")).isEqualTo(second.issuanceRequestId());
+    assertThat(awaitCompletedEvents(second, 1).getFirst().get("cardId").asText())
+        .isEqualTo(secondCard.toString());
+  }
+
   /** (c) A mesma mensagem entregue duas vezes gera um único cartão; o resultado é republicado. */
   @Test
   void duplicateDeliveryIssuesSingleCard() {
@@ -255,6 +320,106 @@ class IssuanceIT {
     assertThat(events)
         .extracting(e -> e.get("cardId").asText())
         .containsOnly(events.getFirst().get("cardId").asText());
+  }
+
+  /**
+   * TC2: a mensagem volta depois que o desfecho foi gravado (falha antes do ACK). A reentrega não
+   * reavalia nem gera outro cartão: republica o mesmo resultado.
+   */
+  @Test
+  void redeliveryAfterCommitRepublishesWithoutNewEffect() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-tc2");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    awaitCompletedEvents(r, 1);
+
+    send(r.body(), "corr-tc2-redelivery");
+
+    List<JsonNode> events = awaitCompletedEvents(r, 2);
+    assertThat(events).extracting(e -> e.get("cardId").asText()).containsOnly(cardId.toString());
+    assertThat(cardCount(r)).isEqualTo(1);
+    assertThat(catalogCalls(productPath(r.productId()))).hasSize(1);
+  }
+
+  /**
+   * TC4: recusa de negócio persistida e reentregue sem mudar o desfecho, mesmo com o produto ativo.
+   */
+  @Test
+  void redeliveredBusinessRefusalKeepsItsOutcome() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "CANCELED");
+    send(r.body(), "corr-tc4");
+    awaitDecision(r, "FAILED");
+
+    stubProduct(r.productId(), "ACTIVE"); // o catálogo muda, mas a solicitação já foi decidida
+    send(r.body(), "corr-tc4-redelivery");
+
+    List<JsonNode> events = awaitCompletedEvents(r, 2);
+    assertThat(events)
+        .extracting(e -> e.get("failureReason").asText())
+        .containsOnly("PRODUCT_CANCELED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
+  }
+
+  /** TC5: duas solicitações concorrentes para o mesmo portador e produto: só uma emite. */
+  @Test
+  void concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard() {
+    Request first = Request.random();
+    Request second = new Request(UUID.randomUUID(), first.cardholderId(), first.productId());
+    stubProduct(first.productId(), "ACTIVE");
+
+    CompletableFuture.allOf(
+            CompletableFuture.runAsync(() -> send(first.body(), "corr-tc5-a")),
+            CompletableFuture.runAsync(() -> send(second.body(), "corr-tc5-b")))
+        .join();
+
+    await()
+        .atMost(Duration.ofSeconds(20))
+        .until(() -> decisionCount(first) == 1 && decisionCount(second) == 1);
+    List<String> outcomes =
+        List.of(
+            jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                .param(first.issuanceRequestId())
+                .query(String.class)
+                .single(),
+            jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                .param(second.issuanceRequestId())
+                .query(String.class)
+                .single());
+    assertThat(outcomes).containsExactlyInAnyOrder("ISSUED", "FAILED");
+    assertThat(cardCount(first)).isEqualTo(1);
+  }
+
+  /**
+   * TC6: observação vencida no cache e catálogo fora: nenhuma emissão, a mensagem volta para
+   * retentativa e emite quando o catálogo se recupera.
+   */
+  @Test
+  void staleCacheWithCatalogDownDoesNotIssueAndRetries() throws Exception {
+    Request r = Request.random();
+    String path = productPath(r.productId());
+    cache(r.productId(), "ACTIVE", Instant.now().minus(Duration.ofMinutes(6)));
+    catalog.stubFor(
+        get(path)
+            .inScenario(path)
+            .whenScenarioStateIs(STARTED)
+            .willReturn(serverError())
+            .willSetStateTo("up"));
+    catalog.stubFor(
+        get(path)
+            .inScenario(path)
+            .whenScenarioStateIs("up")
+            .willReturn(okJson(product(r.productId(), "ACTIVE"))));
+
+    send(r.body(), "corr-tc6");
+
+    await().atMost(Duration.ofSeconds(10)).until(() -> catalogCalls(path).size() >= 1);
+    assertThat(decisionCount(r)).isZero();
+    assertThat(cardCount(r)).isZero();
+    awaitDecision(r, "ISSUED");
+    assertThat(catalogCalls(path)).hasSize(2);
   }
 
   /** Um segundo pedido para o mesmo portador e produto é recusado pela regra de unicidade. */
@@ -296,7 +461,24 @@ class IssuanceIT {
     awaitDecision(r, "FAILED");
     assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
     assertThat(catalogCalls(productPath(r.productId()))).hasSize(1);
-    assertThat(redisTemplate.hasKey("cardforge:product:v1:" + r.productId())).isFalse();
+    JsonNode tombstone =
+        objectMapper.readTree(
+            redisTemplate.opsForValue().get("cardforge:product:v1:" + r.productId()));
+    assertThat(tombstone.get("status").asText()).isEqualTo("CANCELED");
+  }
+
+  /** TC7: cancelamento conhecido (lápide) recusa a emissão sem consultar o catálogo. */
+  @Test
+  void knownCancellationRefusesIssuanceWithoutCatalog() throws Exception {
+    Request r = Request.random();
+    cache(r.productId(), "CANCELED", Instant.now().minus(Duration.ofMinutes(1)));
+    stubProduct(r.productId(), "ACTIVE");
+
+    send(r.body(), "corr-tombstone");
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(catalogCalls(productPath(r.productId()))).isEmpty();
   }
 
   @Test
@@ -317,6 +499,140 @@ class IssuanceIT {
                     .messages()
                     .stream()
                     .anyMatch(m -> m.body().contains(marker)));
+  }
+
+  @Test
+  void cardStatusTransitionsAreIdempotentAndCanceledIsTerminal() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-status");
+    UUID cardId = awaitDecision(r, "ISSUED");
+
+    changeStatus(cardId, "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(cardId, "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(cardId, "unblock")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    changeStatus(cardId, "unblock")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    changeStatus(cardId, "cancel")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+    changeStatus(cardId, "cancel")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+    changeStatus(cardId, "block")
+        .andExpect(status().isConflict())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/invalid-status-transition"));
+    changeStatus(cardId, "unblock").andExpect(status().isConflict());
+
+    Map<String, Object> row =
+        jdbc.sql("SELECT status, created_at, updated_at FROM cards WHERE id = ?")
+            .param(cardId)
+            .query()
+            .singleRow();
+    assertThat(row.get("status")).isEqualTo("CANCELED");
+    assertThat(((java.sql.Timestamp) row.get("updated_at")))
+        .isAfter((java.sql.Timestamp) row.get("created_at"));
+  }
+
+  /** Cancelar libera o índice parcial: o portador pode receber um novo cartão do produto. */
+  @Test
+  void canceledCardAllowsNewCardForSameCardholderAndProduct() throws Exception {
+    Request first = Request.random();
+    stubProduct(first.productId(), "ACTIVE");
+    send(first.body(), "corr-first-card");
+    UUID firstCard = awaitDecision(first, "ISSUED");
+    changeStatus(firstCard, "cancel").andExpect(status().isOk());
+
+    Request second = new Request(UUID.randomUUID(), first.cardholderId(), first.productId());
+    send(second.body(), "corr-second-card");
+    UUID secondCard = awaitDecision(second, "ISSUED");
+
+    assertThat(secondCard).isNotEqualTo(firstCard);
+  }
+
+  @Test
+  void cardStatusChangeRequiresWriteScopeAndExistingCard() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
+                    "/api/v1/cards/" + UUID.randomUUID() + "/block")
+                .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))))
+        .andExpect(status().isForbidden());
+    changeStatus(UUID.randomUUID(), "block").andExpect(status().isNotFound());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions changeStatus(
+      UUID cardId, String action) throws Exception {
+    return mvc.perform(
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
+                "/api/v1/cards/" + cardId + "/" + action)
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:write"))));
+  }
+
+  @Test
+  void listsCardsOfCardholderWithPagination() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-list");
+    UUID cardId = awaitDecision(r, "ISSUED");
+
+    listCards(r.cardholderId().toString(), null)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(cardId.toString()))
+        .andExpect(jsonPath("$.content[0].panLastFour").exists())
+        .andExpect(jsonPath("$.page.size").value(20))
+        .andExpect(jsonPath("$.page.totalElements").value(1))
+        .andExpect(jsonPath("$.page.totalPages").value(1));
+
+    listCards(UUID.randomUUID().toString(), null)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(0))
+        .andExpect(jsonPath("$.page.totalPages").value(0));
+  }
+
+  @Test
+  void cardListingRejectsOversizedPageAndMissingCardholder() throws Exception {
+    listCards(UUID.randomUUID().toString(), "101").andExpect(status().isBadRequest());
+    listCards(null, null).andExpect(status().isBadRequest());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions listCards(
+      String cardholderId, String size) throws Exception {
+    var request =
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/cards")
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read")));
+    if (cardholderId != null) {
+      request.param("cardholderId", cardholderId);
+    }
+    if (size != null) {
+      request.param("size", size);
+    }
+    return mvc.perform(request);
+  }
+
+  @Test
+  void publishesBinOccupancyForIssuedCards() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-bin");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    String bin =
+        jdbc.sql("SELECT bin FROM cards WHERE id = ?").param(cardId).query(String.class).single();
+
+    binOccupancy.refresh();
+
+    assertThat(bin).matches("\\d{8}");
+    assertThat(meters.get("cardforge.bin.occupancy.ratio").tag("bin", bin).gauge().value())
+        .isEqualTo(1.0 / 10_000_000);
   }
 
   @Test

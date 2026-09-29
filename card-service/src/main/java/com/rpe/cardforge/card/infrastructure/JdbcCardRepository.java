@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.YearMonth;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -35,9 +36,9 @@ class JdbcCardRepository implements CardRepository {
       return jdbc.sql(
                   """
                   INSERT INTO cards
-                    (id, cardholder_id, product_id, issuance_request_id, pan_hmac, pan_last_four,
-                     expiration_date, status, created_at, updated_at, version)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    (id, cardholder_id, product_id, issuance_request_id, bin, pan_hmac,
+                     pan_last_four, expiration_date, status, created_at, updated_at, version)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                   ON CONFLICT (pan_hmac) DO NOTHING
                   """)
               .params(
@@ -45,6 +46,7 @@ class JdbcCardRepository implements CardRepository {
                   card.cardholderId(),
                   card.productId(),
                   card.issuanceRequestId(),
+                  card.bin(),
                   card.panHmac(),
                   card.panLastFour(),
                   card.expirationDate().toString(),
@@ -78,12 +80,52 @@ class JdbcCardRepository implements CardRepository {
     return jdbc.sql("SELECT * FROM cards WHERE id = ?").param(id).query(this::map).optional();
   }
 
+  @Override
+  public List<Card> findByCardholderId(UUID cardholderId, int offset, int limit) {
+    return jdbc.sql(
+            """
+            SELECT * FROM cards WHERE cardholder_id = ?
+            ORDER BY created_at DESC, id
+            OFFSET ? LIMIT ?
+            """)
+        .params(cardholderId, offset, limit)
+        .query(this::map)
+        .list();
+  }
+
+  @Override
+  public long countByCardholderId(UUID cardholderId) {
+    return jdbc.sql("SELECT count(*) FROM cards WHERE cardholder_id = ?")
+        .param(cardholderId)
+        .query(Long.class)
+        .single();
+  }
+
+  @Override
+  public Optional<Card> findByIdForUpdate(UUID id) {
+    return jdbc.sql("SELECT * FROM cards WHERE id = ? FOR UPDATE")
+        .param(id)
+        .query(this::map)
+        .optional();
+  }
+
+  @Override
+  public void updateStatus(Card card) {
+    jdbc.sql(
+            """
+            UPDATE cards SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?
+            """)
+        .params(card.status().name(), Timestamp.from(card.updatedAt()), card.id())
+        .update();
+  }
+
   private Card map(ResultSet rs, int row) throws SQLException {
     return new Card(
         rs.getObject("id", UUID.class),
         rs.getObject("cardholder_id", UUID.class),
         rs.getObject("product_id", UUID.class),
         rs.getObject("issuance_request_id", UUID.class),
+        rs.getString("bin"),
         rs.getString("pan_hmac"),
         rs.getString("pan_last_four"),
         YearMonth.parse(rs.getString("expiration_date")),

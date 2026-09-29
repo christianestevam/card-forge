@@ -47,6 +47,11 @@ public class ProductEligibility {
 
   public Eligibility check(UUID productId) {
     Optional<ProductObservation> cached = readCache(productId);
+    if (cached.isPresent() && cached.get().isKnownCancellation()) {
+      // CANCELED é terminal: a lápide recusa sem consultar o catálogo (TC7).
+      meters.counter("cardforge.product.cache", "result", "tombstone").increment();
+      return new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
+    }
     if (cached.isPresent()
         && cached.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
       meters.counter("cardforge.product.cache", "result", "hit").increment();
@@ -76,11 +81,13 @@ public class ProductEligibility {
         yield new Eligibility.Eligible(found.bin());
       }
       case Found found -> {
-        evictCache(productId);
+        writeCache(
+            new ProductObservation(
+                productId, found.name(), found.bin(), ProductState.CANCELED, observedAt));
         yield new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
       }
       case NotFound notFound -> {
-        evictCache(productId);
+        writeCache(ProductObservation.notFound(productId, observedAt));
         yield new Eligibility.Ineligible(FailureReason.PRODUCT_NOT_FOUND);
       }
     };
@@ -100,14 +107,6 @@ public class ProductEligibility {
       cache.save(observation);
     } catch (ProductCache.CacheUnavailableException e) {
       degraded("write", e);
-    }
-  }
-
-  private void evictCache(UUID productId) {
-    try {
-      cache.evict(productId);
-    } catch (ProductCache.CacheUnavailableException e) {
-      degraded("evict", e);
     }
   }
 
