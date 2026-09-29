@@ -1,0 +1,62 @@
+name: cardforge
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_local
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres && psql -U postgres -d card -c 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:8.8.3-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  localstack:
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+    ports: ["127.0.0.1:4566:4566"]
+    volumes:
+      - ./infra/localstack/init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "test -f /tmp/cardforge-queues-ready && awslocal sqs list-queues >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  keycloak:
+    image: keycloak/keycloak:26.7.4
+    command: [start-dev, --import-realm]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin_local
+      KC_HOSTNAME: http://localhost:8080
+      KC_HEALTH_ENABLED: 'true'
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ./infra/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
+    healthcheck:
+      test: [CMD-SHELL, "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; cat <&3 | grep -q UP'"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+  secrets-init:
+    image: alpine:3.24.2
+    entrypoint: [/bin/sh, /init.sh]
+    volumes:
+      - ./.local/secrets:/secrets
+      - ./infra/secrets-init/init.sh:/init.sh:ro
+volumes:
+  postgres-data:
