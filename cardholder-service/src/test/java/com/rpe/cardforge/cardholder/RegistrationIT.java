@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.jayway.jsonpath.JsonPath;
 import com.rpe.cardforge.platform.outbox.OutboxRelay;
 import java.time.Duration;
@@ -26,6 +27,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -324,6 +326,86 @@ class RegistrationIT {
         .andExpect(jsonPath("$.card.availability").value("UNAVAILABLE"))
         .andExpect(jsonPath("$.card.data").doesNotExist())
         .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+  }
+
+  /** Catálogo offline: produto UNAVAILABLE, o restante da consulta segue completo. */
+  @Test
+  void overviewWithCatalogOfflineKeepsCardAndMarksProductUnavailable() throws Exception {
+    Registered r = registerActive();
+    UUID cardId = issueWithCard(r, id -> okJson(cardJson(id)));
+    remote.stubFor(get(productPath(r.productId())).willReturn(serviceUnavailable()));
+
+    overview(r.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("ISSUED"))
+        .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
+        .andExpect(jsonPath("$.card.availability").value("AVAILABLE"))
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.product.data").doesNotExist())
+        .andExpect(jsonPath("$.cardholder.id").value(r.cardholderId().toString()));
+  }
+
+  /** Catálogo com timeout: mesma degradação, dentro do orçamento de latência. */
+  @Test
+  void overviewWithCatalogTimeoutMarksProductUnavailable() throws Exception {
+    Registered r = registerActive();
+    remote.stubFor(get(productPath(r.productId())).willReturn(okJson("{}").withFixedDelay(3000)));
+
+    long started = System.nanoTime();
+    overview(r.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("PENDING"))
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"));
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+  }
+
+  /** card-service offline: situação ISSUED com cardId preservado, só os detalhes indisponíveis. */
+  @Test
+  void overviewWithCardServiceOfflineKeepsIssuedStatusAndProduct() throws Exception {
+    Registered r = registerActive();
+    UUID cardId = issueWithCard(r, id -> aResponse().withStatus(503));
+
+    overview(r.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.status").value("ISSUED"))
+        .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
+        .andExpect(jsonPath("$.card.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.card.data").doesNotExist())
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.data.status").value("ACTIVE"));
+  }
+
+  /** card-service lento: timeout vira UNAVAILABLE, sem derrubar a consulta. */
+  @Test
+  void overviewWithCardServiceTimeoutMarksCardUnavailable() throws Exception {
+    Registered r = registerActive();
+    UUID cardId = issueWithCard(r, id -> okJson(cardJson(id)).withFixedDelay(3000));
+
+    long started = System.nanoTime();
+    overview(r.cardholderId())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.issuance.cardId").value(cardId.toString()))
+        .andExpect(jsonPath("$.card.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"));
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+  }
+
+  /** Configura a resposta do card-service para o cartão e aplica um resultado ISSUED. */
+  private UUID issueWithCard(Registered r, Function<UUID, ResponseDefinitionBuilder> cardResponse)
+      throws Exception {
+    UUID cardId = UUID.randomUUID();
+    remote.stubFor(get("/api/v1/cards/" + cardId).willReturn(cardResponse.apply(cardId)));
+    sendCompleted(completed(r.requestId(), "ISSUED", cardId, null));
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .until(() -> "ISSUED".equals(requestStatus(r.requestId())));
+    return cardId;
+  }
+
+  private static String cardJson(UUID cardId) {
+    return """
+        {"id":"%s","panLastFour":"4242","expirationDate":"2031-09","status":"ACTIVE"}"""
+        .formatted(cardId);
   }
 
   @Test
