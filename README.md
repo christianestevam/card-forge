@@ -7,8 +7,8 @@ Tudo sobe localmente com um comando (PostgreSQL, Redis, LocalStack, Keycloak e o
 - [Como rodar](#como-rodar)
 - [Roteiro de demonstração](#roteiro-de-demonstração)
 - [Matriz do enunciado](#matriz-do-enunciado)
-- [Arquitetura](#arquitetura) · [APIs](#apis) · [Decisões técnicas](#decisões-técnicas) · [Garantias](#como-o-sistema-impede-cartão-para-produto-inexistente-ou-cancelado) · [Falhas](#comportamento-sob-falha-das-dependências) · [Segurança e privacidade](#controles-de-segurança-e-privacidade) · [Testes](#testes) · [Limitações](#limitações-conhecidas) · [Operação](#procedimento-manual-dlq-e-solicitações-pending-antigas)
-- Como a solução foi construída (método, artefatos, desvios aprovados): [`docs/PROCESSO.md`](docs/PROCESSO.md). ADRs: [`docs/adr/`](docs/adr/README.md).
+- [Estrutura do repositório](#estrutura-do-repositório) · [Arquitetura](#arquitetura) · [APIs](#apis) · [Decisões técnicas](#decisões-técnicas) · [Garantias](#como-o-sistema-impede-cartão-para-produto-inexistente-ou-cancelado) · [Falhas](#comportamento-sob-falha-das-dependências) · [Segurança e privacidade](#controles-de-segurança-e-privacidade) · [Testes](#testes) · [Limitações](#limitações-conhecidas) · [Operação](#procedimento-manual-dlq-e-solicitações-pending-antigas)
+- [Como foi construído](#como-foi-construído): IA e AI-DLC, com detalhes em [`docs/PROCESSO.md`](docs/PROCESSO.md) e os prompts em [`docs/PROMPTS.md`](docs/PROMPTS.md). ADRs: [`docs/adr/`](docs/adr/README.md).
 
 ## Como rodar
 
@@ -79,7 +79,51 @@ No Swagger UI, use **Authorize** com o mesmo `client_id` e `client_secret`.
 | Testes, incluindo integração | Unitários, integração com Testcontainers (PostgreSQL, Redis, LocalStack) e WireMock, e ArchUnit |
 | README com decisões técnicas | Este documento e os ADRs em [`docs/adr/`](docs/adr/README.md) |
 
+## Como foi construído
+
+O projeto foi desenvolvido com IA, com decisão humana em cada etapa.
+
+- **Ferramentas:** Claude Code (Anthropic) como agente executor, conduzindo o **AI-DLC 2.10** (AI-Driven Development Life Cycle, da AWS); Claude (claude.ai) como par de planejamento e para redigir o contexto e os prompts; ChatGPT e GPT Codex (OpenAI) como revisores independentes, antes do código e antes da entrega.
+- **Especificação antes do código:** antes do primeiro prompt ao agente, o contexto foi escrito e versionado: o [product brief](aidlc/spaces/default/knowledge/aidlc-shared/product-brief.md), com regras de negócio e premissas (volumes, PCI-DSS, LGPD, BIN de 8 dígitos); os [padrões de engenharia](aidlc/spaces/default/knowledge/aidlc-shared/engineering-standards.md); e as [regras do projeto](aidlc/spaces/default/memory/project.md) (`ALWAYS`/`NEVER` e decisões já tomadas).
+- **AI-DLC na Ideação e na Inception:** intenção, viabilidade, escopo, práticas, requisitos, histórias, domínio, unidades, contratos e plano de entrega. Cada estágio tem as minhas respostas, o artefato e a revisão, em [`aidlc/`](aidlc/spaces/default/intents/260928-cardforge-release-1/).
+- **Revisão cruzada:** as premissas passaram por três rodadas de revisão de arquitetura antes do código, e o código passou por uma revisão contra o enunciado antes da entrega (corrigida no bloco B4).
+- **Construção acelerada:** o workflow completo previa cerca de 30 gates só na construção, o que não cabia no prazo. A construção foi feita com o Claude Code diretamente, usando os artefatos aprovados como especificação, em quatro blocos: plano aprovado antes do código, branch por bloco, merge só com o CI verde, testes críticos com prova por mutação e cortes documentados em [Débitos e desvios conscientes](#débitos-e-desvios-conscientes).
+
+A história completa (linha do tempo, estratégia, por que o AI-DLC parou na Inception e o que isso custou) está em [`docs/PROCESSO.md`](docs/PROCESSO.md).
+
 ## Arquitetura
+
+### Estrutura do repositório
+
+```text
+card-forge/
+├── product-service/        # microsserviço: catálogo de produtos
+├── cardholder-service/     # microsserviço: cadastro, outbox, consumidor de resultados e consulta consolidada
+├── card-service/           # microsserviço: emissão (consumidor SQS), outbox, cache Redis e cartões
+├── cardforge-platform/     # biblioteca compartilhada (não é um serviço)
+├── infra/
+│   ├── keycloak/           # realm cardforge: clients, escopos e audiências
+│   ├── localstack/         # filas SQS, DLQs e redrive policy
+│   └── postgres/           # um database e um usuário por serviço
+├── scripts/smoke-test.sh   # fluxo ponta a ponta contra o Compose
+├── postman/                # collection e environment local
+├── docs/
+│   ├── adr/                # decisões de arquitetura
+│   ├── PROCESSO.md         # como o projeto foi construído
+│   └── PROMPTS.md          # prompts principais
+├── aidlc/                  # artefatos do AI-DLC: requisitos, domínio, contratos e decisões
+├── .github/workflows/      # CI (./mvnw verify)
+├── docker-compose.yml      # ambiente completo com um comando
+├── Dockerfile              # imagem de qualquer serviço (--build-arg SERVICE=...)
+├── mvnw                    # Maven Wrapper
+└── pom.xml                 # Maven multi-módulo (Java 21, Spring Boot 3.5)
+```
+
+Cada serviço segue os pacotes `domain`, `application`, `infrastructure` e `web` (arquitetura hexagonal enxuta), mais `config` com a configuração do Spring.
+
+O `cardforge-platform` é uma biblioteca Java compilada dentro dos serviços: não tem container, API nem banco. No Compose rodam exatamente três aplicações.
+
+### Fluxo entre os serviços
 
 ```mermaid
 flowchart LR
@@ -241,7 +285,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 2. **Na emissão, que é a decisão que vale:** o `card-service` só emite com uma observação `ACTIVE` do produto de no máximo 5 minutos. Se o cache não tiver uma observação válida, consulta o catálogo. `CANCELED` encerra a solicitação como `FAILED`/`PRODUCT_CANCELED`, e 404 como `FAILED`/`PRODUCT_NOT_FOUND`, sem retry.
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. **Produto cancelado depois do cadastro também é barrado:** a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos. O teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Aos 4 minutos, a observação `ACTIVE` ainda autoriza; passados 5, a emissão é recusada com `PRODUCT_CANCELED`.
-5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la. Isso vale também para a emissão em andamento: se a resposta `ACTIVE` dela chega depois da lápide, a gravação é recusada e a emissão segue o cancelamento.
+5. **Cancelamento conhecido prevalece:** depois que o `card-service` grava `CANCELED` no cache, a lápide recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la. Isso vale também para a emissão em andamento: se a resposta `ACTIVE` dela chega depois da lápide, a gravação é recusada e a emissão segue o cancelamento. Exceção conhecida: um cancelamento observado com instante anterior a uma observação `ACTIVE` já guardada não substitui essa observação; nesse caso vale a janela de 5 minutos (ver [Limitações conhecidas](#limitações-conhecidas)).
 6. **A idade da observação é conferida no ponto da emissão:** a observação que autorizou é verificada de novo dentro da transação, com o relógio desse momento. Se passou de 5 minutos durante a espera (conexão, lock), a transação é desfeita e a decisão recomeça com uma observação atual.
 7. **Resposta fora do contrato nunca decide:** um `200` do catálogo com status nulo, desconhecido ou com BIN inválido é erro de configuração (alerta e retry), nunca "produto inexistente" nem "cancelado".
 
@@ -331,6 +375,14 @@ Por restrição de prazo, esta versão fez cortes aprovados explicitamente. Cada
 - **Métrica de profundidade das filas e DLQs:** não implementada; use `ApproximateNumberOfMessages` pela CLI (procedimento abaixo).
 - **Status do portador não bloqueia a emissão pendente:** um portador bloqueado ou cancelado depois do cadastro ainda recebe o cartão pendente, até existir a cascata de status.
 - **Spring Boot 3.5.x** está fora do suporte OSS desde junho de 2026; a migração para 4.x está planejada no [ADR-0001](docs/adr/0001-java-21-spring-boot-3-5-monorepo.md).
+- **Consistência fina do cache de produto.** A garantia de negócio se mantém: um cancelamento bloqueia novas emissões em até 5 minutos. Dentro dessa janela, há refinamentos mapeados para uma próxima versão:
+  - um cancelamento com instante anterior a uma observação `ACTIVE` já guardada é recusado pelo cache, que continua `ACTIVE` até a observação vencer (no máximo 5 minutos);
+  - a consulta do cartão pode exibir a observação lida, e não a vencedora, numa corrida com um cancelamento;
+  - na consulta, um cache antigo é exibido como `STALE` sem tentar atualizar no catálogo;
+  - a idade da observação é conferida antes das operações que podem bloquear no banco, o que pode estender a janela em alguns segundos sob contenção;
+  - o `/overview` espera até 1 s pelo `card-service`, que pode esperar até 2 s pelo catálogo, então o cartão pode aparecer `UNAVAILABLE` com o catálogo lento.
+
+  A correção prevista é uma resolução atômica no Redis que devolve a observação vencedora, com o cancelamento sempre prevalecendo sobre `ACTIVE`, e a verificação da idade imediatamente antes do commit.
 - **Os logs de erro do Spring Cloud AWS** incluem o stack trace a cada falha técnica retentada. É ruído, não perda: a mensagem volta após o backoff.
 
 ## Procedimento manual: DLQ e solicitações PENDING antigas

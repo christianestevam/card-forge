@@ -1,13 +1,53 @@
 # Como o CardForge foi construído
 
-Este documento reúne a trilha interna do processo: como a solução foi planejada e entregue, os identificadores usados nos artefatos (BR, FR, TC, U1 a U6) e os desvios aprovados em relação às regras do projeto. Para avaliar ou rodar a solução, comece pelo [README](../README.md).
+Este documento conta como a solução foi planejada e entregue: as ferramentas de IA usadas, a estratégia, por que o AI-DLC foi seguido até o fim da Inception e não na construção, os identificadores dos artefatos (BR, FR, TC, U1 a U6) e os desvios aprovados. Para avaliar ou rodar a solução, comece pelo [README](../README.md). Os prompts principais estão em [`PROMPTS.md`](PROMPTS.md).
 
-## Método
+## Linha do tempo
 
-A solução foi construída com o AI-DLC (AI-Driven Development Life Cycle), um fluxo em fases com aprovação humana em cada etapa:
+| Quando | Etapa | Ferramentas |
+|---|---|---|
+| Antes de 28/09 | Análise do enunciado, levantamento de dúvidas, escolha do método, estudo do AI-DLC e redação do contexto inicial (product brief, padrões de engenharia e regras do projeto) | Claude (chat) |
+| Antes de 28/09 | Três rodadas de revisão de arquitetura sobre as premissas, antes de qualquer código | ChatGPT (revisor) e Claude (triagem) |
+| 28/09 00h → 29/09 01h | AI-DLC 2.10, profile MVP: Ideação (intenção, viabilidade, escopo) e Inception completa (práticas, requisitos, histórias, domínio, unidades, contratos e plano de entrega) | Claude Code + AI-DLC |
+| 29/09 01h → 16h | Construção acelerada em quatro blocos (B1 a B4), usando os artefatos aprovados como especificação | Claude Code |
+| 29/09 | Revisão técnica pré-entrega contra o enunciado, corrigida no B4 | GPT Codex (OpenAI) e Claude Code |
 
-- **Ideação e Inception:** intenção, escopo, requisitos (`BR*`, `FR*`, `NFR*`), histórias, desenho de domínio, unidades de trabalho, contratos e plano de entrega.
-- **Construção:** em blocos (Bolts), cada um num branch curto, com merge em `main` só com o CI verde e uma tag por bloco.
+## Ferramentas de IA
+
+| Ferramenta | Papel |
+|---|---|
+| **Claude Code** (Anthropic) com **AI-DLC 2.10.0** (AWS, open source) | Agente executor. Na Ideação e na Inception, conduziu o workflow do AI-DLC com os agentes especializados e dois revisores (arquitetura e produto), com o preset de modelos `thorough` (revisão com esforço máximo). Na construção, implementou os blocos com o plano apresentado e aprovado antes de cada bloco. |
+| **Claude** (claude.ai) | Par de planejamento: análise do enunciado, estudo do AI-DLC e do estado atual do desenvolvimento com IA, redação do contexto inicial, apoio às respostas de cada gate, triagem dos achados das revisões e redação dos prompts de construção. |
+| **ChatGPT** | Revisor independente de arquitetura: três rodadas sobre as premissas e decisões, antes da implementação. |
+| **GPT Codex** (OpenAI) | Revisão técnica pré-entrega do código contra o enunciado (achados R1 a R7 e melhorias), tratada no B4. |
+
+Nenhuma saída de IA entrou sem decisão humana: as revisões de uma ferramenta foram analisadas com outra, e a decisão final, registrada, foi sempre minha.
+
+## Estratégia
+
+1. **Especificação antes do código.** Antes do primeiro prompt ao agente, o contexto foi escrito e versionado: [`product-brief.md`](../aidlc/spaces/default/knowledge/aidlc-shared/product-brief.md) (negócio, regras numeradas, requisitos não funcionais e escopo), [`engineering-standards.md`](../aidlc/spaces/default/knowledge/aidlc-shared/engineering-standards.md) (convenções técnicas) e [`project.md`](../aidlc/spaces/default/memory/project.md) (regras `ALWAYS`/`NEVER` e decisões já tomadas). É engenharia de contexto: o agente trabalha dentro de limites explícitos, e não de suposições.
+2. **Premissas explícitas.** O enunciado não define volumes, SLAs nem várias regras de negócio. Em vez de perguntar ao avaliador, defini premissas com base no contexto de varejo e meios de pagamento (picos de adesão no checkout, BIN de 8 dígitos, controles de PCI-DSS e LGPD, idade mínima de 18 anos) e as registrei no brief.
+3. **Contexto de produção para os agentes.** O brief apresenta o CardForge como uma release que vai para produção, e não como um exercício, para calibrar o rigor dos agentes. Para equilibrar, ele declara as restrições reais de entrega: prazo curto, uma pessoa e YAGNI (cada componente precisa se justificar por um requisito).
+4. **Revisão cruzada antes de codar.** As premissas passaram por três rodadas de revisão com outra IA. Elas mudaram o desenho: a janela de dado desatualizado na emissão (que permitia emitir para produto já cancelado) foi substituída pela regra dos 5 minutos; o resultado da emissão passou a ser persistido (`issuance_processing`), inclusive as recusas; a unicidade foi levada para índices parciais no banco; e o retry ganhou um orçamento calculado.
+5. **Humano em cada gate.** Cada estágio do AI-DLC terminou com a minha aprovação. Correções relevantes viraram regras do projeto (learning loop), e contradições entre respostas foram resolvidas antes de avançar.
+6. **Risco primeiro.** Primeiro um esqueleto ponta a ponta verificado por smoke test; depois as garantias mais arriscadas (emissão, idempotência e falhas); por último as APIs simples e a documentação.
+7. **Testes que provam comportamento.** Os testes críticos cobrem falhas e concorrência. Nos de maior valor, a proteção foi desligada de propósito para confirmar que o teste falha pelo motivo certo (prova por mutação).
+
+## Por que o AI-DLC não foi seguido até o fim
+
+O profile MVP do AI-DLC tem 23 estágios. Só a Ideação e a Inception levaram cerca de um dia de gates. Na construção, cada uma das seis unidades passaria por Functional Design, NFR Requirements, NFR Design, Infrastructure Design e Code Generation: perto de 30 gates, cada um com revisão adversarial, registro de aprendizados e as reconfirmações exigidas pela Guard Policy `strict`. Esse ritmo não cabia no prazo de entrega.
+
+A decisão foi **encerrar o workflow ao fim da Inception**, com o desenho completo e aprovado, e **construir com o Claude Code diretamente**, usando os artefatos aprovados (requisitos, domínio, contratos, ADRs e plano de unidades) como especificação. Os hooks do AI-DLC foram desativados apenas localmente para isso.
+
+**O que foi mantido do método:** plano antes do código em cada bloco, com aprovação; um branch por bloco, com merge em `main` só com o CI verde e uma tag por bloco; testes escritos antes nas garantias críticas; provas por mutação; e cortes aprovados explicitamente e documentados (D1 a D12).
+
+**O que se perdeu:** os artefatos de desenho por unidade da fase de construção e a trilha de auditoria do AI-DLC nessa fase. A trilha da Ideação e da Inception está completa em `aidlc/`.
+
+**Lição:** para um prazo de dias, o AI-DLC rende mais onde a incerteza é maior, na Ideação e na Inception. Na construção, um profile mais enxuto (por exemplo `classic` ou profundidade mínima), o preset de modelos `balanced` e a Guard Policy `relaxed` para quem trabalha sozinho teriam mantido o workflow dentro do prazo.
+
+## Artefatos do AI-DLC
+
+O AI-DLC (AI-Driven Development Life Cycle) é um fluxo em fases em que a IA propõe, pergunta e produz, e um humano aprova cada etapa. Nesta entrega, ele cobriu a Ideação e a Inception: intenção, viabilidade, escopo, práticas, requisitos (`BR*`, `FR*`, `NFR*`), histórias, desenho de domínio, unidades de trabalho, contratos e plano de entrega. Cada estágio tem o arquivo de perguntas com as minhas respostas, o artefato gerado e, quando houve, a revisão.
 
 Os artefatos ficam em [`aidlc/spaces/default/intents/260928-cardforge-release-1/`](../aidlc/spaces/default/intents/260928-cardforge-release-1/). Os principais:
 
@@ -19,7 +59,7 @@ Os artefatos ficam em [`aidlc/spaces/default/intents/260928-cardforge-release-1/
 | `inception/contract-design/contract-summary.md` | Contratos C1 a C6 (REST, eventos e convenções de erro) |
 | `inception/delivery-planning/bolt-plan.md` | Plano original de Bolts |
 
-As regras permanentes do projeto (`ALWAYS`/`NEVER`, stack, decisões) estão em [`aidlc/spaces/default/memory/project.md`](../aidlc/spaces/default/memory/project.md) e `team.md`. O diretório `.claude/` contém a configuração do AI-DLC para o Claude Code.
+As regras permanentes do projeto (`ALWAYS`/`NEVER`, stack, decisões) estão em [`aidlc/spaces/default/memory/project.md`](../aidlc/spaces/default/memory/project.md) e `team.md`. O diretório `.claude/` (configuração do AI-DLC para o Claude Code, cerca de 300 arquivos do framework) não é versionado: ele é gerado com `aidlc config --harness claude`.
 
 ## Blocos entregues
 

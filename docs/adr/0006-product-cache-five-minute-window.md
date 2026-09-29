@@ -24,7 +24,7 @@ A emissão não pode acontecer para um produto inexistente ou cancelado além de
 ## Consequências
 
 - Com o catálogo fora, emissões continuam por até 5 minutos para produtos observados recentemente. Depois disso, ficam retidas com backoff até o catálogo voltar (TC6).
-- Um cancelamento pode levar até 5 minutos para bloquear emissões, no limite aceito pela regra. Depois que o `card-service` observa o cancelamento, o bloqueio é imediato e definitivo (TC7).
+- Um cancelamento pode levar até 5 minutos para bloquear emissões, no limite aceito pela regra. Depois que o `card-service` grava a lápide, o bloqueio é imediato (TC7). Um cancelamento observado com instante anterior a uma observação `ACTIVE` já guardada é recusado pela gravação condicional; nesse caso, o bloqueio acontece quando a observação `ACTIVE` vence, ainda dentro dos 5 minutos. O endurecimento (cancelamento sempre prevalecendo sobre `ACTIVE`) está registrado nas limitações conhecidas do README.
 - O cache não serve à consulta consolidada: ela consulta o catálogo (ADR-002 do Desenho de Domínio).
 
 ## Alternativas rejeitadas
