@@ -100,7 +100,9 @@ O `card-service` é a única autoridade sobre "o produto pode emitir agora?" (`P
 
 - O cache é um adaptador explícito (sem `@Cacheable`): um registro por produto em `cardforge:product:v1:{productId}`, em JSON, com `productId`, `name`, `bin`, `status` e `validatedAt`, e TTL físico de 24 h.
 - **A emissão só usa o registro se ele for `ACTIVE` e tiver `validatedAt` de no máximo 5 minutos (inclusivo).** Ler o cache nunca renova `validatedAt`: só uma resposta nova do catálogo grava um instante novo.
-- Registro ausente, expirado ou ilegível: o catálogo é consultado **uma vez por processamento**. `ACTIVE` grava um registro novo, com o instante anterior à chamada, o que é conservador. `CANCELED` ou 404 removem o registro.
+- Registro ausente, expirado ou ilegível: o catálogo é consultado **uma vez por processamento**. `ACTIVE` grava um registro novo, com o instante anterior à chamada, o que é conservador.
+- **Lápide de cancelamento (TC7):** `CANCELED` é gravado no lugar do registro e nunca é substituído, porque `CANCELED` é terminal (BR1.2). Enquanto a lápide existir (24 h), a emissão é recusada com `PRODUCT_CANCELED` sem consultar o catálogo. Um 404 também é gravado (`NOT_FOUND`), mas não recusa sozinho: o catálogo é consultado de novo.
+- **Gravação atômica e condicional** (script Lua no Redis): vence a observação mais recente. Uma resposta `ACTIVE` de uma consulta iniciada antes do cancelamento, que chegue depois, nunca restaura o registro.
 - Redis indisponível: a leitura vira consulta ao catálogo e a degradação é registrada em log e na métrica `cardforge_product_cache_total{result="error"}`. Redis e catálogo indisponíveis juntos são falha técnica, com retentativa pela fila.
 
 Com isso, um produto cancelado pode, no pior caso, ainda autorizar emissões por até 5 minutos, que é a janela aceita pela regra BR4.1.
@@ -143,6 +145,42 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 2. **Na emissão, que é a decisão que vale:** o `card-service` só emite com uma observação `ACTIVE` do produto de no máximo 5 minutos. Se o cache não tiver uma observação válida, consulta o catálogo. `CANCELED` encerra a solicitação como `FAILED`/`PRODUCT_CANCELED`, e 404 como `FAILED`/`PRODUCT_NOT_FOUND`, sem retry.
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. O produto cancelado **depois** do cadastro também é barrado: a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos (teste `staleCachedObservationIsRecheckedInCatalog`).
+5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la (testes `knownCancellationRefusesIssuanceWithoutCatalog` e `RedisProductCacheIT`).
+
+## Status de cartões e portadores
+
+| Endpoint | Transição | Escopo |
+|---|---|---|
+| `POST /api/v1/cards/{id}/block` | `ACTIVE` → `BLOCKED` | `cards:write` |
+| `POST /api/v1/cards/{id}/unblock` | `BLOCKED` → `ACTIVE` | `cards:write` |
+| `POST /api/v1/cards/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cards:write` |
+| `POST /api/v1/cardholders/{id}/block` | `ACTIVE` → `BLOCKED` | `cardholders:write` |
+| `POST /api/v1/cardholders/{id}/unblock` | `BLOCKED` → `ACTIVE` | `cardholders:write` |
+| `POST /api/v1/cardholders/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cardholders:write` |
+
+- Pedido para o status atual responde **200 sem mudança** (idempotente). A partir de `CANCELED`, `block` e `unblock` respondem **409** `invalid-status-transition`.
+- As transições são métodos do agregado (`block()`, `unblock()`, `cancel()`) e são aplicadas com lock de linha. Só atualizam `status` e `updatedAt`; não há histórico nesta release (D5).
+- Cancelar um cartão libera o índice de "um cartão não cancelado por portador e produto": o portador pode receber um novo cartão do mesmo produto.
+- O status do portador não se propaga para os cartões nem para a emissão pendente (FR4.8, ver limitações).
+
+## Testes críticos
+
+`./mvnw verify` roda unitários, integração com Testcontainers (PostgreSQL, Redis, LocalStack) e WireMock, e ArchUnit.
+
+| Garantia | Teste |
+|---|---|
+| TC1: SQS fora no cadastro; publicação pelo outbox depois da recuperação | `RegistrationIT.sqsUnavailableKeepsEventInOutboxUntilItRecovers` |
+| TC2: reentrega depois do commit, sem novo efeito | `IssuanceIT.redeliveryAfterCommitRepublishesWithoutNewEffect` |
+| TC3: mensagens duplicadas simultâneas geram um único cartão | `IssuanceIT.duplicateDeliveryIssuesSingleCard` |
+| TC4: recusa de negócio reentregue sem mudar o desfecho | `IssuanceIT.redeliveredBusinessRefusalKeepsItsOutcome` |
+| TC5: duas solicitações concorrentes para o mesmo portador e produto | `IssuanceIT.concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard` |
+| TC6: cache vencido com catálogo fora: nenhuma emissão, retentativa | `IssuanceIT.staleCacheWithCatalogDownDoesNotIssueAndRetries` |
+| TC7: cancelamento conhecido impede uso de `ACTIVE` antigo | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `RedisProductCacheIT` |
+| TC8: consulta consolidada distingue os casos de completude | `RegistrationIT.overview*` (catálogo e card-service offline ou lentos) |
+| TC-PAN: colisão forçada de PAN | `IssuanceIT.panCollisionIsResolvedWithANewCandidate` |
+| Recusa de negócio sem retry | `IssuanceIT.canceledProductFailsWithoutRetry` |
+
+**Provas por mutação:** nos quatro testes de maior valor (TC3, TC-PAN, recusa sem retry e TC1), a proteção foi desligada temporariamente e o teste foi visto falhando pelo motivo certo. A proteção desligada e a falha observada estão registradas no commit `test: record mutation proofs for the four highest-value tests`. A lápide (TC7) foi escrita antes da implementação e vista falhando pela asserção.
 
 ## Comportamento sob falha das dependências
 
@@ -180,15 +218,14 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 | D9 | **CI só com o job `verify`:** sem o job do smoke test, sem Trivy e sem Dependabot. | `team.md`: job separado de smoke test; Trivy e Dependabot | Job com `docker compose up -d --build --wait && ./scripts/smoke-test.sh`; Trivy (segredos, dependências e imagens); Dependabot semanal ignorando majors do Spring Boot. |
 | D10 | **Smoke test reduzido:** token → produto → cadastro → polling do `/overview` até `ISSUED` → conferência do `panLastFour`. Não verifica a chave no Redis nem o `correlationId` nos logs. | Definição de pronto do B1 | Verificar a chave `cardforge:product:v1:{id}` no Redis e o `correlationId` nos logs dos dois serviços. Hoje o `correlationId` já atravessa a fila, pelo envelope e pelo atributo SQS, e aparece nos logs JSON. |
 | D11 | **O `traceparent` não atravessa a fila.** Ele é propagado só por configuração (Micrometer Tracing): entre serviços via HTTP e nos logs. Na SQS, o consumidor começa um trace novo; o `correlationId` continua ligando o fluxo de ponta a ponta. | ALWAYS propagar correlationId **e contexto de tracing** em HTTP e mensagens SQS | Gravar `traceparent` na linha do outbox, enviá-lo como atributo da mensagem e restaurá-lo no consumidor, ou adotar a observação nativa do Spring Cloud AWS. |
+| D12 | **Sem reconciliação automática** (FR6): nenhum job republica solicitações `PENDING` antigas. A recuperação é manual, pelo [procedimento abaixo](#procedimento-manual-dlq-e-solicitações-pending-antigas). | FR6.1 a FR6.3 e testes críticos TC9 e TC10 | Job agendado (a cada 5 min, lotes de 50 com `SKIP LOCKED`, idade mínima de 3 h, 30 min entre tentativas, suspensão e alerta após 3), republicando pelo outbox. O `card-service` já republica o resultado de solicitações decididas, então a reconciliação não gera cartão duplicado. |
 
 ### Fora do escopo deste bloco (limitações conhecidas)
 
 Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6) que não entraram na entrega.
 
-- **Reconciliação (FR6):** solicitações `PENDING` com resultado perdido não são republicadas automaticamente. O outbox e a DLQ garantem que nada se perde entre banco e fila, mas a recuperação de uma solicitação presa é manual: reenviar a mensagem da DLQ para a fila de origem.
-- **Proteção do cache contra resposta antiga ("lápide"):** uma remoção por `CANCELED` pode, numa corrida rara, ser sobrescrita por uma resposta `ACTIVE` mais antiga que chegue depois. A janela de 5 minutos continua limitando o efeito.
 - **Consulta consolidada:** o produto sai `CURRENT` ou `UNAVAILABLE`. O caso `STALE` (observação guardada no cadastro, `ProductObservation`) não foi implementado.
-- **Endpoints ainda não entregues:** listagem e atualização de produto, cancelamento de produto, transições de status de portador e cartão, e listagem de cartões por portador.
+- **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto, e listagem de cartões por portador.
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
 - **Métricas de ocupação do BIN (alerta em 70%) e profundidade das filas:** não implementadas.
@@ -196,3 +233,61 @@ Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6
 - **FR4.8:** a emissão não depende do status do portador. Um portador bloqueado ou cancelado depois do cadastro ainda recebe o cartão pendente, até a cascata de status da R1.1.
 - **Spring Boot 3.5.x** está fora do suporte OSS desde junho de 2026 (diretriz da plataforma). A migração para 4.x é débito registrado.
 - **Os logs de erro do Spring Cloud AWS** incluem o stack trace a cada falha técnica retentada. É ruído, não perda: a mensagem volta após o backoff.
+
+## Procedimento manual: DLQ e solicitações PENDING antigas
+
+Enquanto não há reconciliação automática (D12), este é o procedimento para recuperar solicitações sem desfecho. Ele é seguro porque o `card-service` nunca reavalia uma solicitação já decidida: republicar só reenvia o resultado persistido, sem gerar outro cartão.
+
+**1. Listar solicitações `PENDING` antigas** (mais de 3 h, acima do orçamento de retry de cerca de 2 h):
+
+```bash
+docker compose exec -T postgres psql -U postgres -d cardholder_service -c "
+  SELECT id, cardholder_id, product_id, requested_at FROM issuance_requests
+  WHERE status = 'PENDING' AND requested_at < now() - interval '3 hours'
+  ORDER BY requested_at;"
+```
+
+**2. Ver se o `card-service` já decidiu** (se sim, só o resultado se perdeu):
+
+```bash
+docker compose exec -T postgres psql -U postgres -d card_service -c "
+  SELECT * FROM issuance_processing WHERE issuance_request_id = '<issuanceRequestId>';"
+```
+
+**3. Inspecionar as DLQs** e corrigir a causa antes de reprocessar (catálogo, credenciais, mensagem inválida):
+
+```bash
+docker compose exec -T localstack awslocal sqs get-queue-attributes \
+  --queue-url http://localhost:4566/000000000000/card-issuance-requested-dlq \
+  --attribute-names ApproximateNumberOfMessages
+docker compose exec -T localstack awslocal sqs receive-message \
+  --queue-url http://localhost:4566/000000000000/card-issuance-requested-dlq \
+  --max-number-of-messages 10 --message-attribute-names All
+```
+
+Os alertas aparecem nos logs com o prefixo `ALERT` (`ALERT configuration`, `ALERT invalid issuance request`, `ALERT issuance result sent to DLQ`, `ALERT PAN space`).
+
+**4. Redrive da DLQ para a fila de origem**, depois de corrigida a causa:
+
+```bash
+docker compose exec -T localstack awslocal sqs start-message-move-task \
+  --source-arn arn:aws:sqs:us-east-1:000000000000:card-issuance-requested-dlq
+```
+
+Mensagens em `card-issuance-completed-dlq` são resultados contraditórios, desconhecidos ou inválidos. Investigue antes de mover: uma contradição voltaria direto para a DLQ.
+
+**5. Republicar uma solicitação sem mensagem** (nem na fila nem na DLQ). O evento entra no outbox do `cardholder-service`, e o relay o publica:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d cardholder_service -c "
+  INSERT INTO outbox_events (event_id, aggregate_id, destination, event_type, event_version,
+                             occurred_at, correlation_id, payload)
+  SELECT gen_random_uuid(), r.id, 'card-issuance-requested', 'IssuanceRequested', 1, now(),
+         'manual-reconciliation',
+         jsonb_build_object('issuanceRequestId', r.id, 'cardholderId', r.cardholder_id,
+                            'productId', r.product_id)
+  FROM issuance_requests r
+  WHERE r.id = '<issuanceRequestId>' AND r.status = 'PENDING';"
+```
+
+Acompanhe pelo `/overview` do portador ou pelo `correlationId` `manual-reconciliation` nos logs.
