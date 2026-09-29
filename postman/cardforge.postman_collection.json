@@ -957,6 +957,246 @@
           ]
         }
       ]
+    },
+    {
+      "name": "4. Product cancellation",
+      "description": "Cancela um produto novo e mostra os efeitos: cancelar de novo responde 200 sem mudança; cadastro para produto cancelado responde 422 product-canceled.",
+      "item": [
+        {
+          "name": "Create product to cancel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"To be canceled\",\n  \"bin\": \"{{cancelBin}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('cancelBin', String(Math.floor(10000000 + Math.random() * 89999999)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));",
+                  "pm.collectionVariables.set('canceledProductId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel product",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{canceledProductId}}/cancel",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{canceledProductId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('CANCELED', () => pm.expect(pm.response.json().status).to.eql('CANCELED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel product again (idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/{{canceledProductId}}/cancel",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "{{canceledProductId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('CANCELED', () => pm.expect(pm.response.json().status).to.eql('CANCELED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 - Product with duplicate BIN (canceled BIN stays taken)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Reuse\",\n  \"bin\": \"{{cancelBin}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('type bin-already-registered', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/bin-already-registered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 - Cardholder for canceled product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cardholderUrl}}/api/v1/cardholders",
+              "host": [
+                "{{cardholderUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cardholders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{cpf3}}\",\n  \"fullName\": \"Maria da Silva\",\n  \"birthDate\": \"1990-05-20\",\n  \"productId\": \"{{canceledProductId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = []; for (let i = 0; i < 9; i++) d.push(Math.floor(Math.random() * 10));",
+                  "for (const n of [9, 10]) { let s = 0; for (let i = 0; i < n; i++) s += d[i] * (n + 1 - i); let r = (s * 10) % 11; d.push(r === 10 ? 0 : r); }",
+                  "pm.collectionVariables.set('cpf3', d.join(''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('type product-canceled', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/product-canceled'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 - Cancel unknown product",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/api/v1/products/00000000-0000-0000-0000-000000000000/cancel",
+              "host": [
+                "{{productUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "00000000-0000-0000-0000-000000000000",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('type resource-not-found', () => pm.expect(pm.response.json().type).to.eql('https://cardforge.rpe.com.br/problems/resource-not-found'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "variable": [
@@ -991,6 +1231,18 @@
     {
       "key": "overviewAttempts",
       "value": "0"
+    },
+    {
+      "key": "cancelBin",
+      "value": ""
+    },
+    {
+      "key": "canceledProductId",
+      "value": ""
+    },
+    {
+      "key": "cpf3",
+      "value": ""
     }
   ]
 }
