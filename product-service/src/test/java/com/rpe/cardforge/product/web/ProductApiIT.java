@@ -257,6 +257,26 @@ class ProductApiIT {
   }
 
   @Test
+  void openApiDocumentsProblemResponsesAndBusinessErrors() throws Exception {
+    mvc.perform(get("/v3/api-docs"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.components.schemas.ProblemDetail.properties.invalidFields").exists())
+        .andExpect(
+            jsonPath("$.components.responses.Unauthorized.headers.WWW-Authenticate").exists())
+        .andExpect(jsonPath("$.paths['/api/v1/products'].post.responses['401']").exists())
+        .andExpect(jsonPath("$.paths['/api/v1/products'].post.responses['403']").exists())
+        .andExpect(
+            jsonPath("$.paths['/api/v1/products'].post.responses['409'].description")
+                .value(org.hamcrest.Matchers.containsString("bin-already-registered")))
+        .andExpect(
+            jsonPath("$.paths['/api/v1/products/{productId}'].patch.responses['422'].description")
+                .value(org.hamcrest.Matchers.containsString("bin-immutable")))
+        .andExpect(
+            jsonPath("$.info.description")
+                .value(org.hamcrest.Matchers.containsString("product-canceled-read-only")));
+  }
+
+  @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
         .andExpect(status().isMethodNotAllowed());

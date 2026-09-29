@@ -1,3 +1,4 @@
 com.rpe.cardforge.platform.correlation.CorrelationAutoConfiguration
 com.rpe.cardforge.platform.problem.ProblemAutoConfiguration
 com.rpe.cardforge.platform.outbox.OutboxAutoConfiguration
+com.rpe.cardforge.platform.openapi.OpenApiAutoConfiguration

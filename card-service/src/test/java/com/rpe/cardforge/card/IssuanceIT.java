@@ -716,6 +716,17 @@ class IssuanceIT {
   }
 
   @Test
+  void openApiDocumentsCardErrors() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/v3/api-docs"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.paths['/api/v1/cards/{cardId}'].get.responses['403']").exists())
+        .andExpect(
+            jsonPath("$.paths['/api/v1/cards/{cardId}/block'].post.responses['409'].description")
+                .value(org.hamcrest.Matchers.containsString("invalid-status-transition")));
+  }
+
+  @Test
   void unknownCardIsNotFound() throws Exception {
     mvc.perform(
             org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(

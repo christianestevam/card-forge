@@ -1,8 +1,14 @@
 package com.rpe.cardforge.card.web;
 
+import static com.rpe.cardforge.platform.openapi.ProblemResponsesCustomizer.PROBLEM_SCHEMA;
+import static org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON_VALUE;
+
 import com.rpe.cardforge.card.application.CardQueryService;
 import com.rpe.cardforge.card.application.CardStatusService;
 import com.rpe.cardforge.platform.paging.PageMetadata;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.util.List;
@@ -17,6 +23,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/cards")
 class CardController {
+
+  private static final String PROBLEM_JSON = APPLICATION_PROBLEM_JSON_VALUE;
+  private static final String PROBLEM = PROBLEM_SCHEMA;
 
   private final CardQueryService cards;
   private final CardStatusService status;
@@ -38,24 +47,48 @@ class CardController {
         PageMetadata.of(result.page(), result.size(), result.totalElements()));
   }
 
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found: cartão inexistente",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @GetMapping("/{cardId}")
   CardResponse get(@PathVariable UUID cardId) {
     return CardResponse.from(cards.get(cardId));
   }
 
   /** ACTIVE -> BLOCKED; 200 sem mudança se já estiver BLOCKED; 409 a partir de CANCELED. */
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
+  @ApiResponse(
+      responseCode = "409",
+      description = "invalid-status-transition: a partir de CANCELED",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PostMapping("/{cardId}/block")
   CardResponse block(@PathVariable UUID cardId) {
     return CardResponse.from(status.block(cardId));
   }
 
   /** BLOCKED -> ACTIVE; 200 sem mudança se já estiver ACTIVE; 409 a partir de CANCELED. */
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
+  @ApiResponse(
+      responseCode = "409",
+      description = "invalid-status-transition: a partir de CANCELED",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PostMapping("/{cardId}/unblock")
   CardResponse unblock(@PathVariable UUID cardId) {
     return CardResponse.from(status.unblock(cardId));
   }
 
   /** ACTIVE ou BLOCKED -> CANCELED (terminal); 200 sem mudança se já estiver CANCELED. */
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PostMapping("/{cardId}/cancel")
   CardResponse cancel(@PathVariable UUID cardId) {
     return CardResponse.from(status.cancel(cardId));

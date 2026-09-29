@@ -547,6 +547,21 @@ class RegistrationIT {
   }
 
   @Test
+  void openApiDocumentsRegistrationErrors() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.get("/v3/api-docs"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.paths['/api/v1/cardholders'].post.responses['202']").exists())
+        .andExpect(jsonPath("$.paths['/api/v1/cardholders'].post.responses['200']").doesNotExist())
+        .andExpect(jsonPath("$.paths['/api/v1/cardholders'].post.responses['401']").exists())
+        .andExpect(
+            jsonPath("$.paths['/api/v1/cardholders'].post.responses['409'].description")
+                .value(org.hamcrest.Matchers.containsString("cpf-already-registered")))
+        .andExpect(
+            jsonPath("$.paths['/api/v1/cardholders'].post.responses['422'].description")
+                .value(org.hamcrest.Matchers.containsString("product-canceled")));
+  }
+
+  @Test
   void unknownCardholderIsNotFound() throws Exception {
     overview(UUID.randomUUID()).andExpect(status().isNotFound());
   }

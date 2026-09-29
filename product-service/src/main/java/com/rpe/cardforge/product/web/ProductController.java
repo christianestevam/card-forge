@@ -1,8 +1,14 @@
 package com.rpe.cardforge.product.web;
 
+import static com.rpe.cardforge.platform.openapi.ProblemResponsesCustomizer.PROBLEM_SCHEMA;
+import static org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON_VALUE;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rpe.cardforge.platform.paging.PageMetadata;
 import com.rpe.cardforge.product.application.ProductService;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -23,12 +29,24 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/products")
 class ProductController {
 
+  private static final String PROBLEM_JSON = APPLICATION_PROBLEM_JSON_VALUE;
+  private static final String PROBLEM = PROBLEM_SCHEMA;
+
   private final ProductService products;
 
   ProductController(ProductService products) {
     this.products = products;
   }
 
+  @ApiResponse(
+      responseCode = "409",
+      description = "bin-already-registered: o BIN já pertence a outro produto",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
+  @ApiResponse(
+      responseCode = "422",
+      description =
+          "validation-failed: bin fora de 8 dígitos numéricos ou nome ausente; ver invalidFields",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PostMapping
   ResponseEntity<ProductResponse> create(@Valid @RequestBody CreateProductRequest request) {
     ProductResponse created =
@@ -47,6 +65,10 @@ class ProductController {
         PageMetadata.of(result.page(), result.size(), result.totalElements()));
   }
 
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found: produto inexistente",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @GetMapping("/{productId}")
   ProductResponse get(@PathVariable UUID productId) {
     return ProductResponse.from(products.get(productId));
@@ -56,6 +78,19 @@ class ProductController {
    * Atualiza nome e descrição de produto ACTIVE. {@code bin} no corpo gera 422 bin-immutable;
    * produto CANCELED gera 409 product-canceled-read-only.
    */
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found: produto inexistente",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
+  @ApiResponse(
+      responseCode = "409",
+      description = "product-canceled-read-only: produto cancelado não é editável",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
+  @ApiResponse(
+      responseCode = "422",
+      description =
+          "bin-immutable quando o corpo contém bin (nunca ignorado); validation-failed para nome ou descrição inválidos",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PatchMapping("/{productId}")
   ProductResponse update(@PathVariable UUID productId, @RequestBody JsonNode body) {
     ProductUpdate update = ProductUpdate.parse(body);
@@ -63,6 +98,10 @@ class ProductController {
   }
 
   /** ACTIVE -> CANCELED; 200 sem mudança se o produto já estiver CANCELED (contrato C1). */
+  @ApiResponse(
+      responseCode = "404",
+      description = "resource-not-found: produto inexistente",
+      content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PostMapping("/{productId}/cancel")
   ProductResponse cancel(@PathVariable UUID productId) {
     return ProductResponse.from(products.cancel(productId));
