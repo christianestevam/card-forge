@@ -43,11 +43,7 @@ public class ProductDetails {
   public ProductView forQuery(UUID productId) {
     Optional<ProductObservation> cached = readCache(productId);
     if (cached.isPresent() && cached.get().status() != ProductState.NOT_FOUND) {
-      ProductObservation o = cached.get();
-      Duration age = Duration.between(o.validatedAt(), clock.instant());
-      Availability availability =
-          age.compareTo(freshness) <= 0 ? Availability.CURRENT : Availability.STALE;
-      return ProductView.of(availability, o);
+      return view(cached.get());
     }
 
     Instant observedAt = clock.instant();
@@ -56,8 +52,7 @@ public class ProductDetails {
         ProductObservation observation =
             new ProductObservation(
                 productId, found.name(), found.bin(), found.status(), observedAt);
-        writeCache(observation);
-        return ProductView.of(Availability.CURRENT, observation);
+        return view(mergeObservation(observation));
       }
     } catch (ProductCatalog.CatalogUnavailableException
         | ProductCatalog.CatalogMisconfiguredException e) {
@@ -75,12 +70,25 @@ public class ProductDetails {
     }
   }
 
-  private void writeCache(ProductObservation observation) {
+  private ProductObservation mergeObservation(ProductObservation observation) {
     try {
-      cache.save(observation);
+      return cache.mergeAndGet(observation);
     } catch (ProductCache.CacheUnavailableException e) {
       log.warn("Product cache unavailable for card query: {}", e.toString());
+      return observation;
     }
+  }
+
+  private ProductView view(ProductObservation observation) {
+    if (observation.status() == ProductState.NOT_FOUND) {
+      return ProductView.unavailable();
+    }
+    Duration age = Duration.between(observation.validatedAt(), clock.instant());
+    Availability availability =
+        !age.isNegative() && age.compareTo(freshness) <= 0
+            ? Availability.CURRENT
+            : Availability.STALE;
+    return ProductView.of(availability, observation);
   }
 
   public enum Availability {

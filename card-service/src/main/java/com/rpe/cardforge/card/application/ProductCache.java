@@ -11,13 +11,12 @@ public interface ProductCache {
   Optional<ProductObservation> find(UUID productId);
 
   /**
-   * Grava a observação de forma atômica, só se ela for a mais recente. Uma observação CANCELED
-   * (lápide) nunca é substituída; CANCELED ou NOT_FOUND nunca são desfeitos por uma resposta ACTIVE
-   * mais antiga.
-   *
-   * @return false se a observação foi descartada por já existir outra mais recente ou definitiva
+   * Resolve e devolve a observação vencedora na mesma operação atômica. CANCELED é terminal e
+   * prevalece mesmo quando sua consulta começou antes da observação ACTIVE armazenada. Fora desse
+   * caso vence o instante mais recente; em empate, NOT_FOUND prevalece sobre ACTIVE. A observação
+   * retornada venceu nesse instante, sem impedir atualizações posteriores.
    */
-  boolean save(ProductObservation observation);
+  ProductObservation mergeAndGet(ProductObservation observation);
 
   /** Redis indisponível: quem chama registra a degradação e segue para o catálogo. */
   class CacheUnavailableException extends RuntimeException {

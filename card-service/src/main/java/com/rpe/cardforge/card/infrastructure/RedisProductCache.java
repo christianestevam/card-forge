@@ -32,24 +32,28 @@ class RedisProductCache implements ProductCache {
 
   /**
    * KEYS[1] = chave; ARGV[1] = JSON novo; ARGV[2] = validatedAt em epoch millis; ARGV[3] = TTL em
-   * millis. Retorna 1 se gravou, 0 se descartou.
+   * millis; ARGV[4] = status recebido. Retorna o JSON vencedor, inclusive se não gravou.
    */
-  private static final RedisScript<Long> SAVE_IF_NEWEST =
+  private static final RedisScript<String> MERGE_AND_GET =
       RedisScript.of(
           """
           local current = redis.call('GET', KEYS[1])
           if current then
             local ok, obj = pcall(cjson.decode, current)
             if ok and type(obj) == 'table' then
-              if obj.status == 'CANCELED' then return 0 end
+              if obj.status == 'CANCELED' then return current end
               local currentAt = tonumber(obj.validatedAtMillis)
-              if currentAt and currentAt > tonumber(ARGV[2]) then return 0 end
+              if ARGV[4] ~= 'CANCELED' and currentAt then
+                if currentAt > tonumber(ARGV[2]) then return current end
+                if currentAt == tonumber(ARGV[2]) and obj.status == 'NOT_FOUND'
+                    and ARGV[4] == 'ACTIVE' then return current end
+              end
             end
           end
           redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
-          return 1
+          return ARGV[1]
           """,
-          Long.class);
+          String.class);
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -86,7 +90,7 @@ class RedisProductCache implements ProductCache {
   }
 
   @Override
-  public boolean save(ProductObservation o) {
+  public ProductObservation mergeAndGet(ProductObservation o) {
     String json;
     try {
       json =
@@ -102,20 +106,24 @@ class RedisProductCache implements ProductCache {
       throw new IllegalStateException("Cannot serialize product observation", e);
     }
     try {
-      Long written =
+      String winner =
           redis.execute(
-              SAVE_IF_NEWEST,
+              MERGE_AND_GET,
               List.of(KEY_PREFIX + o.productId()),
               json,
               String.valueOf(o.validatedAt().toEpochMilli()),
-              String.valueOf(TTL.toMillis()));
-      boolean saved = written != null && written == 1L;
-      if (!saved) {
-        log.info(
-            "Kept existing cache entry for product {}: newer or definitive observation",
-            o.productId());
+              String.valueOf(TTL.toMillis()),
+              o.status().name());
+      if (winner == null) {
+        throw new CacheUnavailableException("Redis did not return the effective observation", null);
       }
-      return saved;
+      try {
+        CachedProduct cached = objectMapper.readValue(winner, CachedProduct.class);
+        return new ProductObservation(
+            cached.productId(), cached.name(), cached.bin(), cached.status(), cached.validatedAt());
+      } catch (JsonProcessingException | RuntimeException e) {
+        throw new CacheUnavailableException("Redis returned an unreadable observation", e);
+      }
     } catch (DataAccessException e) {
       throw new CacheUnavailableException("Redis write failed", e);
     }

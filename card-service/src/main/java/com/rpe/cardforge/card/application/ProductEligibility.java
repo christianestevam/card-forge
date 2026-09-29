@@ -6,7 +6,6 @@ import com.rpe.cardforge.card.application.ProductCatalog.Found;
 import com.rpe.cardforge.card.application.ProductCatalog.NotFound;
 import com.rpe.cardforge.card.domain.FailureReason;
 import com.rpe.cardforge.card.domain.ProductObservation;
-import com.rpe.cardforge.card.domain.ProductState;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
@@ -73,57 +72,29 @@ public class ProductEligibility {
       throw new IssuanceConfigurationException("Product catalog misconfigured", e);
     }
 
-    return switch (lookup) {
-      case Found found when found.status() == ProductState.ACTIVE ->
-          afterActiveObservation(
+    ProductObservation observation =
+        switch (lookup) {
+          case Found found ->
               new ProductObservation(
-                  productId, found.name(), found.bin(), ProductState.ACTIVE, observedAt));
-      case Found found -> {
-        writeCache(
-            new ProductObservation(
-                productId, found.name(), found.bin(), ProductState.CANCELED, observedAt));
-        yield new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
-      }
-      case NotFound notFound -> {
-        writeCache(ProductObservation.notFound(productId, observedAt));
-        yield new Eligibility.Ineligible(FailureReason.PRODUCT_NOT_FOUND);
+                  productId, found.name(), found.bin(), found.status(), observedAt);
+          case NotFound notFound -> ProductObservation.notFound(productId, observedAt);
+        };
+    try {
+      observation = cache.mergeAndGet(observation);
+    } catch (ProductCache.CacheUnavailableException e) {
+      // Sem Redis, a resposta recém-obtida do catálogo continua sendo a autoridade.
+      degraded("write", e);
+    }
+    return switch (observation.status()) {
+      case CANCELED -> new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
+      case NOT_FOUND -> new Eligibility.Ineligible(FailureReason.PRODUCT_NOT_FOUND);
+      case ACTIVE -> {
+        if (!observation.authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
+          throw new TransientIssuanceException("Effective product observation is not fresh");
+        }
+        yield new Eligibility.Eligible(observation.bin(), observation.validatedAt());
       }
     };
-  }
-
-  /**
-   * Grava a observação ACTIVE e decide por ela, a menos que o cache a recuse por já ter uma
-   * observação mais recente ou definitiva. Nesse caso a decisão segue a vencedora: um cancelamento
-   * conhecido recusa a emissão, mesmo que a resposta ACTIVE desta consulta tenha chegado depois.
-   */
-  private Eligibility afterActiveObservation(ProductObservation observed) {
-    boolean saved;
-    try {
-      saved = cache.save(observed);
-    } catch (ProductCache.CacheUnavailableException e) {
-      degraded("write", e);
-      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
-    }
-    if (saved) {
-      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
-    }
-
-    Optional<ProductObservation> winner;
-    try {
-      winner = cache.find(observed.productId());
-    } catch (ProductCache.CacheUnavailableException e) {
-      throw new TransientIssuanceException("Superseded product observation could not be read", e);
-    }
-    if (winner.isPresent() && winner.get().isKnownCancellation()) {
-      log.info("ACTIVE response for product {} lost to a known cancellation", observed.productId());
-      return new Eligibility.Ineligible(FailureReason.PRODUCT_CANCELED);
-    }
-    if (winner.isPresent()
-        && winner.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
-      return new Eligibility.Eligible(winner.get().bin(), winner.get().validatedAt());
-    }
-    throw new TransientIssuanceException(
-        "Product observation superseded by a newer one; deciding again later");
   }
 
   private Optional<ProductObservation> readCache(UUID productId) {
@@ -132,14 +103,6 @@ public class ProductEligibility {
     } catch (ProductCache.CacheUnavailableException e) {
       degraded("read", e);
       return Optional.empty();
-    }
-  }
-
-  private void writeCache(ProductObservation observation) {
-    try {
-      cache.save(observation);
-    } catch (ProductCache.CacheUnavailableException e) {
-      degraded("write", e);
     }
   }
 
