@@ -207,13 +207,13 @@ Todas exigem `Authorization: Bearer <JWT>` e respondem erros em `application/pro
 | Produto desatualizado | qualquer | qualquer | `STALE` (com `observedAt`) |
 | Produto sem observação | qualquer | qualquer | `UNAVAILABLE` |
 
-O `cardholder-service` guarda a última observação de cada produto, gravada no cadastro e a cada consulta bem-sucedida ao catálogo. O produto sai `CURRENT` quando veio do catálogo na própria requisição e `STALE` quando veio dessa observação guardada. Os detalhes do cartão vêm sempre do `card-service`.
+O `cardholder-service` guarda a última observação de cada produto, gravada no cadastro e a cada consulta bem-sucedida ao catálogo. O produto sai `CURRENT` quando veio do catálogo na própria requisição e `STALE` quando veio dessa observação guardada. Os detalhes do cartão vêm sempre do `card-service`, usando `includeProduct=false`: essa leitura não consulta Redis nem catálogo. Assim, um catálogo lento degrada somente a seção de produto do overview.
 
 ### Cartões (`card-service`)
 
 | Endpoint | Regra | Escopo |
 |---|---|---|
-| `GET /api/v1/cards/{id}` | Cartão (só `panLastFour`) com a seção `product` | `cards:read` |
+| `GET /api/v1/cards/{id}` | Cartão (só `panLastFour`) com a seção `product` por padrão; `?includeProduct=false` retorna só o cartão, sem Redis ou catálogo | `cards:read` |
 | `GET /api/v1/cards?cardholderId=&page=&size=` | Cartões do portador, paginado (padrão 20, máximo 100) | `cards:read` |
 | `POST /api/v1/cards/{id}/block`, `/unblock`, `/cancel` | Transições de status | `cards:write` |
 
@@ -243,7 +243,7 @@ O `card-service` é a única autoridade sobre "o produto pode emitir agora?" (`P
 - **A emissão só usa o registro se ele for `ACTIVE` e tiver `validatedAt` de no máximo 5 minutos (inclusivo).** Ler o cache nunca renova `validatedAt`: só uma resposta nova do catálogo grava um instante novo.
 - Registro ausente, expirado ou ilegível: o catálogo é consultado **uma vez por processamento**. `ACTIVE` grava um registro novo, com o instante anterior à chamada, o que é conservador.
 - **Lápide de cancelamento:** `CANCELED` é gravado no lugar do registro e nunca é substituído, porque o cancelamento é terminal. Enquanto a lápide existir (24 h), a emissão é recusada com `PRODUCT_CANCELED` sem consultar o catálogo. Um 404 também é gravado (`NOT_FOUND`), mas não recusa sozinho: o catálogo é consultado de novo.
-- **Gravação atômica e condicional** (script Lua no Redis): vence a observação mais recente. Uma resposta `ACTIVE` de uma consulta iniciada antes do cancelamento, que chegue depois, nunca restaura o registro.
+- **Resolução atômica** (script Lua no Redis): compara, grava e devolve a observação vencedora. `CANCELED` prevalece sobre `ACTIVE`/`NOT_FOUND`, mesmo quando sua consulta começou antes. Nos demais casos vence o timestamp mais recente; em empate, `NOT_FOUND` prevalece sobre `ACTIVE`. Tanto emissão quanto consulta usam o valor devolvido pela operação.
 - Redis indisponível: a leitura vira consulta ao catálogo, e a degradação é registrada em log e na métrica `cardforge_product_cache_total{result="error"}`. Redis e catálogo indisponíveis juntos são falha técnica, com retentativa pela fila.
 
 Um produto cancelado pode, no pior caso, ainda autorizar emissões por até 5 minutos. É a janela aceita pela regra de negócio.
@@ -285,7 +285,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 2. **Na emissão, que é a decisão que vale:** o `card-service` só emite com uma observação `ACTIVE` do produto de no máximo 5 minutos. Se o cache não tiver uma observação válida, consulta o catálogo. `CANCELED` encerra a solicitação como `FAILED`/`PRODUCT_CANCELED`, e 404 como `FAILED`/`PRODUCT_NOT_FOUND`, sem retry.
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. **Produto cancelado depois do cadastro também é barrado:** a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos. O teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Aos 4 minutos, a observação `ACTIVE` ainda autoriza; passados 5, a emissão é recusada com `PRODUCT_CANCELED`.
-5. **Cancelamento conhecido prevalece:** depois que o `card-service` grava `CANCELED` no cache, a lápide recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la. Isso vale também para a emissão em andamento: se a resposta `ACTIVE` dela chega depois da lápide, a gravação é recusada e a emissão segue o cancelamento. Exceção conhecida: um cancelamento observado com instante anterior a uma observação `ACTIVE` já guardada não substitui essa observação; nesse caso vale a janela de 5 minutos (ver [Limitações conhecidas](#limitações-conhecidas)).
+5. **Cancelamento conhecido prevalece:** depois que o `card-service` grava `CANCELED` no cache, a lápide recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la. Isso vale também para a emissão em andamento: se a resposta `ACTIVE` dela chega depois da lápide, a gravação é recusada e a emissão segue o cancelamento. Um cancelamento recebido com timestamp anterior também substitui `ACTIVE`.
 6. **A idade da observação é conferida no ponto da emissão:** a observação que autorizou é verificada de novo dentro da transação, com o relógio desse momento. Se passou de 5 minutos durante a espera (conexão, lock), a transação é desfeita e a decisão recomeça com uma observação atual.
 7. **Resposta fora do contrato nunca decide:** um `200` do catálogo com status nulo, desconhecido ou com BIN inválido é erro de configuração (alerta e retry), nunca "produto inexistente" nem "cancelado".
 
@@ -338,7 +338,7 @@ Estes são **controles de aplicação adotados**, alinhados a práticas de PCI-D
 | Solicitações concorrentes para o mesmo portador e produto: só uma emite | `IssuanceIT.concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard` |
 | Catálogo fora (5xx, timeout, cache vencido): nenhuma emissão, retentativa com backoff | `IssuanceIT.catalogServerError…`, `catalogTimeout…`, `staleCacheWithCatalogDownDoesNotIssueAndRetries` |
 | Cancelamento conhecido impede o uso de observação `ACTIVE` antiga, inclusive por uma resposta concorrente | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `IssuanceIT.activeResponseLosingToAKnownCancellationDoesNotIssue`, `RedisProductCacheIT` |
-| Emissão para em até 5 minutos depois do cancelamento, com a idade conferida no ponto da emissão | `IssuanceIT.issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes`, `IssuanceIT.observationThatExpiresBeforeTheIssuingTransactionIsNotUsed` |
+| Idade da observação validada na emissão, inclusive após esperas no banco | `IssuanceIT.issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes`, `IssuanceIT.observationThatExpiresBeforeTheIssuingTransactionIsNotUsed`, `IssuanceIT.expiryDuringCardInsertionRollsBackCardDecisionAndOutbox` |
 | Resposta do catálogo fora do contrato e corpo `null` nunca decidem | `IssuanceIT.catalogResponseOutOfContractNeverDecides`, `IssuanceIT.nullMessageBodyGoesToDeadLetterQueue`, `RegistrationIT.catalogWithNullStatusIsAContractErrorNotAServerError`, `RegistrationIT.nullResultBodyGoesToDeadLetterQueue` |
 | Falha de banco no consumidor segue o backoff | `IssuanceRequestedListenerTest` |
 | Paginação além do limite responde 400, não 500 | `ProductApiIT.productListingRejectsPagesBeyondTheSupportedOffset`, `IssuanceIT.cardListingRejectsPagesBeyondTheSupportedOffset` |
@@ -375,14 +375,8 @@ Por restrição de prazo, esta versão fez cortes aprovados explicitamente. Cada
 - **Métrica de profundidade das filas e DLQs:** não implementada; use `ApproximateNumberOfMessages` pela CLI (procedimento abaixo).
 - **Status do portador não bloqueia a emissão pendente:** um portador bloqueado ou cancelado depois do cadastro ainda recebe o cartão pendente, até existir a cascata de status.
 - **Spring Boot 3.5.x** está fora do suporte OSS desde junho de 2026; a migração para 4.x está planejada no [ADR-0001](docs/adr/0001-java-21-spring-boot-3-5-monorepo.md).
-- **Consistência fina do cache de produto.** A garantia de negócio se mantém: um cancelamento bloqueia novas emissões em até 5 minutos. Dentro dessa janela, há refinamentos mapeados para uma próxima versão:
-  - um cancelamento com instante anterior a uma observação `ACTIVE` já guardada é recusado pelo cache, que continua `ACTIVE` até a observação vencer (no máximo 5 minutos);
-  - a consulta do cartão pode exibir a observação lida, e não a vencedora, numa corrida com um cancelamento;
-  - na consulta, um cache antigo é exibido como `STALE` sem tentar atualizar no catálogo;
-  - a idade da observação é conferida antes das operações que podem bloquear no banco, o que pode estender a janela em alguns segundos sob contenção;
-  - o `/overview` espera até 1 s pelo `card-service`, que pode esperar até 2 s pelo catálogo, então o cartão pode aparecer `UNAVAILABLE` com o catálogo lento.
-
-  A correção prevista é uma resolução atômica no Redis que devolve a observação vencedora, com o cancelamento sempre prevalecendo sobre `ACTIVE`, e a verificação da idade imediatamente antes do commit.
+- **Consulta com cache antigo:** continua apresentando `STALE` sem atualização automática no catálogo; a retenção física é de 24 h. Isso não autoriza emissão com dados vencidos.
+- **Limite da garantia temporal:** a idade é conferida novamente após as escritas de cartão, decisão e outbox, antes de concluir a transação. Se venceu, tudo é desfeito e a elegibilidade é reavaliada fora da transação. Uma pausa entre essa checagem e o commit físico não é eliminada; Redis, catálogo e PostgreSQL não formam uma transação distribuída. Uma observação vencedora no Redis também não impede um cancelamento posterior. Ver [ADR-0006](docs/adr/0006-product-cache-five-minute-window.md).
 - **Os logs de erro do Spring Cloud AWS** incluem o stack trace a cada falha técnica retentada. É ruído, não perda: a mensagem volta após o backoff.
 
 ## Procedimento manual: DLQ e solicitações PENDING antigas

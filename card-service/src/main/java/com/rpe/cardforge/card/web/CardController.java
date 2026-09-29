@@ -52,7 +52,16 @@ class CardController {
       description = "resource-not-found: cartão inexistente",
       content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @GetMapping("/{cardId}")
-  CardResponse get(@PathVariable UUID cardId) {
+  CardResponse get(
+      @PathVariable UUID cardId,
+      @io.swagger.v3.oas.annotations.Parameter(
+              description =
+                  "Inclui produto por padrão; false retorna só o cartão, sem Redis ou catálogo")
+          @RequestParam(defaultValue = "true")
+          boolean includeProduct) {
+    if (!includeProduct) {
+      return CardResponse.from(cards.get(cardId));
+    }
     CardQueryService.CardDetails details = cards.getWithProduct(cardId);
     return CardResponse.from(details.card(), CardResponse.ProductSection.from(details.product()));
   }

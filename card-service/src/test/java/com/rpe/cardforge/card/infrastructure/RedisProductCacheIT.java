@@ -5,9 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.rpe.cardforge.card.application.IssuanceProperties;
+import com.rpe.cardforge.card.application.ProductCatalog;
+import com.rpe.cardforge.card.application.ProductDetails;
 import com.rpe.cardforge.card.domain.ProductObservation;
 import com.rpe.cardforge.card.domain.ProductState;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -56,11 +62,11 @@ class RedisProductCacheIT {
   @Test
   void olderActiveResponseCannotRestoreKnownCancellation() {
     UUID id = UUID.randomUUID();
-    cache.save(observed(id, ProductState.ACTIVE, T0));
-    cache.save(observed(id, ProductState.CANCELED, T0.plusSeconds(10)));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0));
+    cache.mergeAndGet(observed(id, ProductState.CANCELED, T0.plusSeconds(10)));
 
     // Resposta ACTIVE de uma consulta iniciada antes do cancelamento, gravada por último.
-    cache.save(observed(id, ProductState.ACTIVE, T0.plusSeconds(5)));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(5)));
 
     assertThat(cache.find(id))
         .get()
@@ -71,9 +77,9 @@ class RedisProductCacheIT {
   @Test
   void cancellationIsKeptEvenAgainstNewerActiveObservation() {
     UUID id = UUID.randomUUID();
-    cache.save(observed(id, ProductState.CANCELED, T0));
+    cache.mergeAndGet(observed(id, ProductState.CANCELED, T0));
 
-    cache.save(observed(id, ProductState.ACTIVE, T0.plusSeconds(60)));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(60)));
 
     assertThat(cache.find(id))
         .get()
@@ -82,11 +88,29 @@ class RedisProductCacheIT {
   }
 
   @Test
+  void mergeReturnsTheStoredWinnerWithoutRenewingItsTimestamp() {
+    UUID id = UUID.randomUUID();
+    ProductObservation canceled = observed(id, ProductState.CANCELED, T0);
+    cache.mergeAndGet(canceled);
+    assertThat(cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(60))))
+        .isEqualTo(canceled);
+  }
+
+  @Test
+  void notFoundWinsTimestampTiesAgainstActiveInEitherOrder() {
+    UUID id = UUID.randomUUID();
+    var missing = ProductObservation.notFound(id, T0);
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0));
+    assertThat(cache.mergeAndGet(missing)).isEqualTo(missing);
+    assertThat(cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0))).isEqualTo(missing);
+  }
+
+  @Test
   void olderActiveObservationDoesNotReplaceNewerOne() {
     UUID id = UUID.randomUUID();
-    cache.save(observed(id, ProductState.ACTIVE, T0.plusSeconds(30)));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(30)));
 
-    cache.save(observed(id, ProductState.ACTIVE, T0));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0));
 
     assertThat(cache.find(id))
         .get()
@@ -97,13 +121,48 @@ class RedisProductCacheIT {
   @Test
   void newerActiveObservationRefreshesValidatedAt() {
     UUID id = UUID.randomUUID();
-    cache.save(observed(id, ProductState.ACTIVE, T0));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0));
 
-    cache.save(observed(id, ProductState.ACTIVE, T0.plusSeconds(30)));
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(30)));
 
     assertThat(cache.find(id))
         .get()
         .extracting(ProductObservation::validatedAt)
         .isEqualTo(T0.plusSeconds(30));
+  }
+
+  @Test
+  void cancellationReceivedLastWinsEvenWithAnOlderRequestTimestamp() {
+    UUID id = UUID.randomUUID();
+    cache.mergeAndGet(observed(id, ProductState.ACTIVE, T0.plusSeconds(1)));
+    assertThat(cache.mergeAndGet(observed(id, ProductState.CANCELED, T0)).status())
+        .isEqualTo(ProductState.CANCELED);
+    assertThat(cache.find(id))
+        .get()
+        .extracting(ProductObservation::status)
+        .isEqualTo(ProductState.CANCELED);
+  }
+
+  @Test
+  void queryUsesTheCancellationThatWinsWhileTheCatalogCallIsInFlight() {
+    UUID id = UUID.randomUUID();
+    ProductCatalog catalog =
+        productId -> {
+          cache.mergeAndGet(observed(id, ProductState.CANCELED, T0.plusSeconds(1)));
+          return new ProductCatalog.Found(id, "Gold", "12345678", ProductState.ACTIVE);
+        };
+    var properties =
+        new IssuanceProperties(
+            Duration.ofMinutes(5),
+            Duration.ofSeconds(30),
+            Duration.ofMinutes(5),
+            20,
+            "requested",
+            "dlq",
+            "completed");
+    var details =
+        new ProductDetails(
+            cache, catalog, Clock.fixed(T0.plusSeconds(2), ZoneOffset.UTC), properties);
+    assertThat(details.forQuery(id).status()).isEqualTo(ProductState.CANCELED);
   }
 }

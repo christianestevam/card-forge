@@ -396,6 +396,43 @@
           ]
         },
         {
+          "name": "Consultar cartão sem produto (overview)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards/{{cardId}}?includeProduct=false",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards",
+                "{{cardId}}"
+              ],
+              "query": [
+                {
+                  "key": "includeProduct",
+                  "value": "false"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Basic card preserves data without product\", () => { const body = pm.response.json(); pm.expect(body.id).to.eql(pm.collectionVariables.get(\"cardId\")); pm.expect(body.panLastFour).to.match(/^[0-9]{4}$/); pm.expect(body).not.to.have.property(\"product\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "7. List cards of cardholder",
           "request": {
             "method": "GET",

@@ -21,7 +21,12 @@ class HttpCardDirectory implements CardDirectory {
   @Override
   public CardView get(UUID cardId) {
     try {
-      CardView view = cards.get().uri("/api/v1/cards/{id}", cardId).retrieve().body(CardView.class);
+      CardView view =
+          cards
+              .get()
+              .uri("/api/v1/cards/{id}?includeProduct=false", cardId)
+              .retrieve()
+              .body(CardView.class);
       if (view == null || !cardId.equals(view.id())) {
         throw new CardDirectoryUnavailableException("Card response out of contract", null);
       }

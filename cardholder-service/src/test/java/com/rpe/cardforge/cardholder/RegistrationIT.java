@@ -347,7 +347,7 @@ class RegistrationIT {
     Registered r = registerActive();
     UUID cardId = UUID.randomUUID();
     remote.stubFor(
-        get("/api/v1/cards/" + cardId)
+        get("/api/v1/cards/" + cardId + "?includeProduct=false")
             .willReturn(
                 okJson(
                     """
@@ -367,6 +367,7 @@ class RegistrationIT {
         .andExpect(jsonPath("$.product.availability").value("CURRENT"))
         .andExpect(jsonPath("$.product.observedAt").isNotEmpty())
         .andExpect(jsonPath("$.cardholder.maskedCpf").isNotEmpty());
+    remote.verify(getRequestedFor(urlEqualTo("/api/v1/cards/" + cardId + "?includeProduct=false")));
   }
 
   @Test
@@ -379,7 +380,9 @@ class RegistrationIT {
         .andExpect(jsonPath("$.card.availability").value("NOT_APPLICABLE"));
 
     UUID cardId = UUID.randomUUID();
-    remote.stubFor(get("/api/v1/cards/" + cardId).willReturn(aResponse().withStatus(500)));
+    remote.stubFor(
+        get("/api/v1/cards/" + cardId + "?includeProduct=false")
+            .willReturn(aResponse().withStatus(500)));
     remote.stubFor(get(productPath(r.productId())).willReturn(serviceUnavailable()));
     sendCompleted(completed(r.requestId(), "ISSUED", cardId, null));
     await()
@@ -462,7 +465,9 @@ class RegistrationIT {
   private UUID issueWithCard(Registered r, Function<UUID, ResponseDefinitionBuilder> cardResponse)
       throws Exception {
     UUID cardId = UUID.randomUUID();
-    remote.stubFor(get("/api/v1/cards/" + cardId).willReturn(cardResponse.apply(cardId)));
+    remote.stubFor(
+        get("/api/v1/cards/" + cardId + "?includeProduct=false")
+            .willReturn(cardResponse.apply(cardId)));
     sendCompleted(completed(r.requestId(), "ISSUED", cardId, null));
     await()
         .atMost(Duration.ofSeconds(15))
