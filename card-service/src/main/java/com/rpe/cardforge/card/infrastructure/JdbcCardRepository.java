@@ -36,9 +36,9 @@ class JdbcCardRepository implements CardRepository {
       return jdbc.sql(
                   """
                   INSERT INTO cards
-                    (id, cardholder_id, product_id, issuance_request_id, pan_hmac, pan_last_four,
-                     expiration_date, status, created_at, updated_at, version)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    (id, cardholder_id, product_id, issuance_request_id, bin, pan_hmac,
+                     pan_last_four, expiration_date, status, created_at, updated_at, version)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                   ON CONFLICT (pan_hmac) DO NOTHING
                   """)
               .params(
@@ -46,6 +46,7 @@ class JdbcCardRepository implements CardRepository {
                   card.cardholderId(),
                   card.productId(),
                   card.issuanceRequestId(),
+                  card.bin(),
                   card.panHmac(),
                   card.panLastFour(),
                   card.expirationDate().toString(),
@@ -124,6 +125,7 @@ class JdbcCardRepository implements CardRepository {
         rs.getObject("cardholder_id", UUID.class),
         rs.getObject("product_id", UUID.class),
         rs.getObject("issuance_request_id", UUID.class),
+        rs.getString("bin"),
         rs.getString("pan_hmac"),
         rs.getString("pan_last_four"),
         YearMonth.parse(rs.getString("expiration_date")),

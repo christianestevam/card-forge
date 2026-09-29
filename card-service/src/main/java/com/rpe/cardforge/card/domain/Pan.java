@@ -19,6 +19,10 @@ public final class Pan {
     return digits;
   }
 
+  public String bin() {
+    return digits.substring(0, 8);
+  }
+
   public String lastFour() {
     return digits.substring(12);
   }

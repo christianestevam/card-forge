@@ -136,6 +136,8 @@ class IssuanceIT {
   }
 
   @Autowired ScriptedDigits digits;
+  @Autowired com.rpe.cardforge.card.infrastructure.BinOccupancyMetrics binOccupancy;
+  @Autowired io.micrometer.core.instrument.MeterRegistry meters;
   @Autowired SqsAsyncClient sqs;
   @Autowired JdbcClient jdbc;
   @Autowired StringRedisTemplate redisTemplate;
@@ -615,6 +617,22 @@ class IssuanceIT {
       request.param("size", size);
     }
     return mvc.perform(request);
+  }
+
+  @Test
+  void publishesBinOccupancyForIssuedCards() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-bin");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    String bin =
+        jdbc.sql("SELECT bin FROM cards WHERE id = ?").param(cardId).query(String.class).single();
+
+    binOccupancy.refresh();
+
+    assertThat(bin).matches("\\d{8}");
+    assertThat(meters.get("cardforge.bin.occupancy.ratio").tag("bin", bin).gauge().value())
+        .isEqualTo(1.0 / 10_000_000);
   }
 
   @Test

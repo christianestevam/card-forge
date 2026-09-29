@@ -90,7 +90,7 @@ flowchart LR
 - **Hexagonal enxuta por serviço:** `domain` (sem Spring, JPA, AWS SDK ou Jackson, verificado por ArchUnit), `application` (casos de uso e portas), `infrastructure` (persistência, SQS, Redis, HTTP) e `web`.
 - **`cardforge-platform`** (ADR-004 do Desenho de Domínio): outbox e relay, envelope de evento, leitura de eventos, DLQ explícita, propagação de `X-Correlation-Id`, `ProblemDetail` com os tipos do contrato C6 e clientes HTTP com client credentials. Não tem tipos de domínio (ArchUnit).
 - **Segurança:** os três serviços são Resource Servers e validam emissor, audiência (uma por serviço) e escopo (`products:*`, `cardholders:*`, `cards:*`). Entre serviços, client credentials com os escopos de leitura. 401 e 403 saem em `application/problem+json`.
-- **Observabilidade:** Actuator só com `health`, `info` e `prometheus`; readiness depende só do banco. Logs JSON (ECS) com `traceId` e `correlationId`. Métricas `cardforge_outbox_pending`, `cardforge_outbox_oldest_age_seconds`, `cardforge_issuance_decisions_total`, `cardforge_product_cache_total` e `cardforge_pan_collisions_total`.
+- **Observabilidade:** Actuator só com `health`, `info` e `prometheus`; readiness depende só do banco. Logs JSON (ECS) com `traceId` e `correlationId`. Métricas `cardforge_outbox_pending`, `cardforge_outbox_oldest_age_seconds`, `cardforge_issuance_decisions_total`, `cardforge_product_cache_total`, `cardforge_pan_collisions_total` e `cardforge_bin_occupancy_ratio{bin}` (atualizada a cada minuto, com log `ALERT BIN occupancy` a partir de 70% da faixa de 10⁷ PANs de cada BIN).
 
 ## Decisões técnicas
 
@@ -230,7 +230,7 @@ Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6
 - **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto.
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
-- **Métricas de ocupação do BIN (alerta em 70%) e profundidade das filas:** não implementadas.
+- **Métrica de profundidade das filas e DLQs:** não implementada. Use `ApproximateNumberOfMessages` pela CLI (ver o procedimento manual).
 - **FR4.8:** a emissão não depende do status do portador. Um portador bloqueado ou cancelado depois do cadastro ainda recebe o cartão pendente, até a cascata de status da R1.1.
 - **Spring Boot 3.5.x** está fora do suporte OSS desde junho de 2026 (diretriz da plataforma). A migração para 4.x é débito registrado.
 - **Os logs de erro do Spring Cloud AWS** incluem o stack trace a cada falha técnica retentada. É ruído, não perda: a mensagem volta após o backoff.

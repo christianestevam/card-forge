@@ -7,14 +7,16 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Cartão emitido. Guarda só o identificador de unicidade do PAN ({@code panHmac}) e os 4 últimos
- * dígitos; o PAN completo não é persistido e não há CVV (BR5.4).
+ * Cartão emitido. Guarda só o identificador de unicidade do PAN ({@code panHmac}), o BIN (8
+ * primeiros dígitos, públicos no produto) e os 4 últimos dígitos; o PAN completo não é persistido e
+ * não há CVV (BR5.4). O {@code bin} pode ser nulo em cartões emitidos antes da sua introdução.
  */
 public record Card(
     UUID id,
     UUID cardholderId,
     UUID productId,
     UUID issuanceRequestId,
+    String bin,
     String panHmac,
     String panLastFour,
     YearMonth expirationDate,
@@ -50,6 +52,7 @@ public record Card(
         cardholderId,
         productId,
         issuanceRequestId,
+        pan.bin(),
         panHmac,
         pan.lastFour(),
         expiration,
@@ -85,6 +88,7 @@ public record Card(
         cardholderId,
         productId,
         issuanceRequestId,
+        bin,
         panHmac,
         panLastFour,
         expirationDate,
