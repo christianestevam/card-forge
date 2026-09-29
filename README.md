@@ -148,11 +148,13 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. O produto cancelado **depois** do cadastro também é barrado: a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos (teste `staleCachedObservationIsRecheckedInCatalog`).
 5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la (testes `knownCancellationRefusesIssuanceWithoutCatalog` e `RedisProductCacheIT`).
+6. **Prazo máximo de 5 minutos depois do cancelamento no catálogo (NFR7):** o teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Com o produto já cancelado no catálogo, a observação `ACTIVE` de 4 minutos ainda autoriza (janela aceita pela BR4.1); passados 5 minutos, a emissão é recusada com `PRODUCT_CANCELED`.
 
-## Status de cartões e portadores
+## Status de produtos, cartões e portadores
 
 | Endpoint | Transição | Escopo |
 |---|---|---|
+| `POST /api/v1/products/{id}/cancel` | `ACTIVE` → `CANCELED` (terminal) | `products:write` |
 | `POST /api/v1/cards/{id}/block` | `ACTIVE` → `BLOCKED` | `cards:write` |
 | `POST /api/v1/cards/{id}/unblock` | `BLOCKED` → `ACTIVE` | `cards:write` |
 | `POST /api/v1/cards/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cards:write` |
@@ -161,6 +163,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | `POST /api/v1/cardholders/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cardholders:write` |
 
 - Pedido para o status atual responde **200 sem mudança** (idempotente). A partir de `CANCELED`, `block` e `unblock` respondem **409** `invalid-status-transition`.
+- **Produto:** cancelar um produto já `CANCELED` responde 200 sem mudança. O contrato C1 **superou o FR1.5**, que pedia 409, por coerência com a decisão de status idempotente das Histórias (Q12). Cartões já emitidos continuam válidos (BR1.3), e novas emissões param em até 5 minutos.
 - As transições são métodos do agregado (`block()`, `unblock()`, `cancel()`) e são aplicadas com lock de linha. Só atualizam `status` e `updatedAt`; não há histórico nesta release (D5).
 - Cancelar um cartão libera o índice de "um cartão não cancelado por portador e produto": o portador pode receber um novo cartão do mesmo produto.
 - O status do portador não se propaga para os cartões nem para a emissão pendente (FR4.8, ver limitações).
@@ -201,6 +204,22 @@ Todas as chamadas remotas têm timeout configurado:
 - SQS: 5 s no relay e na DLQ;
 - banco: `connection-timeout` de 3 s e `socketTimeout` de 15 s.
 
+## Controles de segurança e privacidade
+
+Estes são **controles de aplicação adotados**, alinhados a práticas de PCI-DSS e LGPD. **Esta release não afirma conformidade integral com PCI-DSS nem com LGPD.**
+
+| Controle | Como está implementado | Onde é verificado |
+|---|---|---|
+| PAN nunca guardado por completo | Só `pan_hmac` (HMAC-SHA256 com chave dedicada) e `pan_last_four`; o PAN existe só em memória na emissão; sem CVV (D3, [ADR-0008](docs/adr/0008-pan-hmac-only.md)) | `LuhnAndPanTest`, `IssuanceIT` (resposta sem `pan`/`panHmac`) |
+| Exibição só dos 4 últimos dígitos | APIs e `/overview` expõem apenas `panLastFour` | `IssuanceIT`, `RegistrationIT` |
+| Chave do PAN fora do repositório e validada | Gerada em `./.local/secrets` (ignorado pelo git); a inicialização falha se estiver ausente ou fora do formato | `HmacPanHasherTest` |
+| CPF protegido | Guardado só com dígitos; respostas com `maskedCpf` (`***.456.789-**`); a data de nascimento nunca é devolvida | `RegistrationIT` |
+| Nada sensível em logs | `toString()` de `Cpf`, `Cardholder`, `Pan` e dos DTOs de cadastro não expõe dados pessoais; logs usam só IDs | `CpfTest`, `CardholderTest`, `LuhnAndPanTest` |
+| Nada sensível em mensagens e erros | Eventos só com IDs; `ProblemDetail` sem CPF, data de nascimento, PAN ou o payload original | `RegistrationIT` (payload do outbox e da mensagem publicada) |
+| Autenticação e autorização | JWT validando emissor, audiência (uma por serviço) e escopo; client credentials entre serviços; 401 e 403 em ProblemDetail | `ProductApiIT` e os ITs de escopo dos demais serviços |
+| Superfície mínima | Actuator só com `health`, `info` e `prometheus`; containers com usuário não root e imagens com versão fixada | Compose e `Dockerfile` |
+| Histórico auditável | **Não implementado nesta release** (D5): as mudanças de status só atualizam `updatedAt` | — |
+
 ## Débitos e desvios conscientes
 
 Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção da R1 aplicou os cortes abaixo, aprovados explicitamente pelo responsável. Conforme a nota no topo de `aidlc/spaces/default/memory/project.md`, **estes desvios prevalecem sobre as regras do projeto nesta construção**. Cada um tem um caminho de evolução.
@@ -217,7 +236,7 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 | D6 | **Cobertura só com relatório** (JaCoCo em `target/site/jacoco`), sem piso de 80%. | `team.md`: piso de 80% de linhas por módulo; NEVER merge com o piso rebaixado | Adicionar a regra `check` do JaCoCo no `verify`, com o mesmo arquivo combinado de unitários e integração, e as exclusões `*Application` e `config`. |
 | D7 | **Spotless só formata** (`./mvnw spotless:apply`); não há `spotless:check` no build. | `team.md`: `spotless:check` bloqueia o build | Ligar `spotless:check` na fase `verify`. |
 | D8 | **Sem SpotBugs/FindSecBugs.** O ArchUnit foi mantido. | `team.md`: SpotBugs com FindSecBugs bloqueia o merge | Adicionar o plugin no `verify`, restrito às categorias de segurança e correção de prioridade alta. |
-| D9 | **CI só com o job `verify`:** sem o job do smoke test, sem Trivy e sem Dependabot. | `team.md`: job separado de smoke test; Trivy e Dependabot | Job com `docker compose up -d --build --wait && ./scripts/smoke-test.sh`; Trivy (segredos, dependências e imagens); Dependabot semanal ignorando majors do Spring Boot. |
+| D9 | **CI só com o job `verify`:** sem o job do smoke test, sem Trivy e sem Dependabot. Decidido de novo no B3: o Compose é verificado **manualmente**, no teste de clone limpo antes da entrega (`docker compose up -d --build --wait && ./scripts/smoke-test.sh`). **Risco:** uma quebra no Compose, no realm ou nas filas passa pelo CI e só aparece nesse teste. | `team.md`: job separado de smoke test; Trivy e Dependabot | Job com `docker compose up -d --build --wait && ./scripts/smoke-test.sh` (cerca de 5 min por execução); Trivy (segredos, dependências e imagens); Dependabot semanal ignorando majors do Spring Boot. |
 | D10 | **Smoke test reduzido:** token → produto → cadastro → polling do `/overview` até `ISSUED` → conferência do `panLastFour`. Não verifica a chave no Redis nem o `correlationId` nos logs. | Definição de pronto do B1 | Verificar a chave `cardforge:product:v1:{id}` no Redis e o `correlationId` nos logs dos dois serviços. Hoje o `correlationId` já atravessa a fila, pelo envelope e pelo atributo SQS, e aparece nos logs JSON. |
 | D11 | **O `traceparent` não atravessa a fila.** Ele é propagado só por configuração (Micrometer Tracing): entre serviços via HTTP e nos logs. Na SQS, o consumidor começa um trace novo; o `correlationId` continua ligando o fluxo de ponta a ponta. | ALWAYS propagar correlationId **e contexto de tracing** em HTTP e mensagens SQS | Gravar `traceparent` na linha do outbox, enviá-lo como atributo da mensagem e restaurá-lo no consumidor, ou adotar a observação nativa do Spring Cloud AWS. |
 | D12 | **Sem reconciliação automática** (FR6): nenhum job republica solicitações `PENDING` antigas. A recuperação é manual, pelo [procedimento abaixo](#procedimento-manual-dlq-e-solicitações-pending-antigas). | FR6.1 a FR6.3 e testes críticos TC9 e TC10 | Job agendado (a cada 5 min, lotes de 50 com `SKIP LOCKED`, idade mínima de 3 h, 30 min entre tentativas, suspensão e alerta após 3), republicando pelo outbox. O `card-service` já republica o resultado de solicitações decididas, então a reconciliação não gera cartão duplicado. |
