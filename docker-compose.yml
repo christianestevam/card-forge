@@ -1,0 +1,96 @@
+# CardForge: ambiente local completo. Suba com: docker compose up -d --build --wait
+#
+# ATENÇÃO: senhas e client secrets abaixo (e no realm do Keycloak e no environment do Postman) são
+# credenciais FIXAS DE DESENVOLVIMENTO, exclusivamente para uso local. Ver "Débitos e desvios
+# conscientes" no README. A única chave gerada é a HMAC do PAN, em ./.local/secrets.
+
+name: cardforge
+
+x-db-passwords: &db-passwords
+  PRODUCT_DB_PASSWORD: product-local-password
+  CARDHOLDER_DB_PASSWORD: cardholder-local-password
+  CARD_DB_PASSWORD: card-local-password
+
+services:
+  secrets-init:
+    image: alpine:3.24.2
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        if [ ! -s /secrets/pan-hmac-key ]; then
+          head -c 32 /dev/urandom | base64 | tr -d '\n' > /secrets/pan-hmac-key.tmp
+          mv /secrets/pan-hmac-key.tmp /secrets/pan-hmac-key
+          echo "pan-hmac-key generated"
+        fi
+        chmod 0444 /secrets/pan-hmac-key
+    volumes:
+      - ./.local/secrets:/secrets
+
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-local-password
+      <<: *db-passwords
+    volumes:
+      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d card_service"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8.8.3-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./infra/localstack/init-queues.sh:/etc/localstack/init/ready.d/init-queues.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs localhost:4566/_localstack/init/ready | grep -q '\"completed\": *true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  keycloak:
+    image: keycloak/keycloak:26.7.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-local-password
+      KC_HEALTH_ENABLED: "true"
+      # Emissor único (http://localhost:8080) para tokens obtidos de fora e de dentro da rede.
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/keycloak/cardforge-realm.json:/opt/keycloak/data/import/cardforge-realm.json:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 20s
+
+volumes:
+  postgres-data:
