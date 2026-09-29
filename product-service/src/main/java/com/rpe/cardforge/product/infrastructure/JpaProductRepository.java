@@ -6,9 +6,12 @@ import com.rpe.cardforge.product.application.ProductRepository;
 import com.rpe.cardforge.product.domain.Bin;
 import com.rpe.cardforge.product.domain.Product;
 import com.rpe.cardforge.product.domain.ProductStatus;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -37,6 +40,34 @@ class JpaProductRepository implements ProductRepository {
   @Override
   public Optional<Product> findById(UUID id) {
     return jpa.findById(id).map(JpaProductRepository::toDomain);
+  }
+
+  @Override
+  public List<Product> findPage(int page, int size) {
+    return jpa.findAll(
+            PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id"))))
+        .map(JpaProductRepository::toDomain)
+        .toList();
+  }
+
+  @Override
+  public long count() {
+    return jpa.count();
+  }
+
+  @Override
+  public Optional<Product> findByIdForUpdate(UUID id) {
+    return jpa.findByIdForUpdate(id).map(JpaProductRepository::toDomain);
+  }
+
+  @Override
+  public Product update(Product product) {
+    ProductJpaEntity entity =
+        jpa.findById(product.id())
+            .orElseThrow(() -> new IllegalStateException("Missing product " + product.id()));
+    entity.apply(
+        product.name(), product.description(), product.status().name(), product.updatedAt());
+    return toDomain(jpa.saveAndFlush(entity));
   }
 
   private static ProductJpaEntity toEntity(Product p) {

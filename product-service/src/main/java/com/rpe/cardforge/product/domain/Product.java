@@ -39,6 +39,32 @@ public final class Product {
     return new Product(id, name, description, bin, ProductStatus.ACTIVE, now, now, null);
   }
 
+  /**
+   * Atualiza só nome e descrição (o BIN é imutável, BR1.1).
+   *
+   * @throws ProductCanceledException se o produto estiver CANCELED
+   */
+  public Product describe(String newName, String newDescription, Instant now) {
+    if (status == ProductStatus.CANCELED) {
+      throw new ProductCanceledException();
+    }
+    if (newName.equals(name) && java.util.Objects.equals(newDescription, description)) {
+      return this;
+    }
+    return new Product(id, newName, newDescription, bin, status, createdAt, now, version);
+  }
+
+  /**
+   * ACTIVE -> CANCELED (BR1.2). Cancelar um produto já cancelado devolve o próprio produto, sem
+   * mudança (contrato C1, idempotente).
+   */
+  public Product cancel(Instant now) {
+    if (status == ProductStatus.CANCELED) {
+      return this;
+    }
+    return new Product(id, name, description, bin, ProductStatus.CANCELED, createdAt, now, version);
+  }
+
   public UUID id() {
     return id;
   }

@@ -1,6 +1,7 @@
 package com.rpe.cardforge.platform.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rpe.cardforge.platform.time.Clocks;
 import io.awspring.cloud.autoconfigure.sqs.SqsAutoConfiguration;
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,7 +40,7 @@ public class OutboxAutoConfiguration {
   @Bean
   OutboxWriter outboxWriter(
       JdbcClient jdbc, ObjectMapper objectMapper, ObjectProvider<Clock> clock) {
-    return new OutboxWriter(jdbc, objectMapper, clock.getIfAvailable(Clock::systemUTC));
+    return new OutboxWriter(jdbc, objectMapper, clock.getIfAvailable(Clocks::systemUtcMicros));
   }
 
   @Bean

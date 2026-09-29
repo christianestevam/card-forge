@@ -20,8 +20,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import com.rpe.cardforge.card.domain.RandomDigits;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
@@ -30,6 +34,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -111,13 +117,50 @@ class IssuanceIT {
     registry.add("pan-hmac-key", () -> Base64.getEncoder().encodeToString(new byte[32]));
   }
 
-  /** Fonte de dígitos roteirizável, para forçar colisões de PAN (TC-PAN). */
+  /**
+   * Fonte de dígitos roteirizável, para forçar colisões de PAN (TC-PAN), e relógio que pode ser
+   * adiantado, para atravessar a janela de 5 minutos sem esperar.
+   */
   @TestConfiguration
-  static class ScriptedDigitsConfig {
+  static class TestDoublesConfig {
     @Bean
     @Primary
     ScriptedDigits scriptedDigits() {
       return new ScriptedDigits();
+    }
+
+    @Bean
+    @Primary
+    AdjustableClock adjustableClock() {
+      return new AdjustableClock();
+    }
+  }
+
+  /** Relógio real com um deslocamento ajustável pelo teste. */
+  static class AdjustableClock extends Clock {
+    private final AtomicReference<Duration> offset = new AtomicReference<>(Duration.ZERO);
+
+    void advance(Duration amount) {
+      offset.updateAndGet(current -> current.plus(amount));
+    }
+
+    void reset() {
+      offset.set(Duration.ZERO);
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return this;
+    }
+
+    @Override
+    public Instant instant() {
+      return Instant.now().truncatedTo(ChronoUnit.MICROS).plus(offset.get());
     }
   }
 
@@ -136,6 +179,13 @@ class IssuanceIT {
   }
 
   @Autowired ScriptedDigits digits;
+  @Autowired AdjustableClock clock;
+
+  @AfterEach
+  void resetClock() {
+    clock.reset();
+  }
+
   @Autowired com.rpe.cardforge.card.infrastructure.BinOccupancyMetrics binOccupancy;
   @Autowired io.micrometer.core.instrument.MeterRegistry meters;
   @Autowired SqsAsyncClient sqs;
@@ -467,6 +517,37 @@ class IssuanceIT {
     assertThat(tombstone.get("status").asText()).isEqualTo("CANCELED");
   }
 
+  /**
+   * NFR7 / BR1.3: depois do cancelamento no catálogo, a emissão ainda pode usar a observação ACTIVE
+   * até 5 minutos (janela aceita pela BR4.1) e para quando ela vence, sem esperar o tempo real.
+   */
+  @Test
+  void issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes() {
+    UUID productId = UUID.randomUUID();
+    String path = productPath(productId);
+    stubProduct(productId, "ACTIVE");
+    Request observed = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+    send(observed.body(), "corr-window-0");
+    awaitDecision(observed, "ISSUED");
+
+    stubProduct(productId, "CANCELED"); // produto cancelado no catálogo
+
+    clock.advance(Duration.ofMinutes(4));
+    Request withinWindow = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+    send(withinWindow.body(), "corr-window-4m");
+    awaitDecision(withinWindow, "ISSUED");
+    assertThat(catalogCalls(path)).hasSize(1);
+
+    clock.advance(Duration.ofMinutes(1).plusSeconds(1)); // 5 min e 1 s desde a observação
+    Request afterWindow = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+    send(afterWindow.body(), "corr-window-5m");
+    awaitDecision(afterWindow, "FAILED");
+
+    assertThat(failureReason(afterWindow)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(afterWindow)).isZero();
+    assertThat(catalogCalls(path)).hasSize(2);
+  }
+
   /** TC7: cancelamento conhecido (lápide) recusa a emissão sem consultar o catálogo. */
   @Test
   void knownCancellationRefusesIssuanceWithoutCatalog() throws Exception {
@@ -633,6 +714,17 @@ class IssuanceIT {
     assertThat(bin).matches("\\d{8}");
     assertThat(meters.get("cardforge.bin.occupancy.ratio").tag("bin", bin).gauge().value())
         .isEqualTo(1.0 / 10_000_000);
+  }
+
+  @Test
+  void openApiDocumentsCardErrors() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/v3/api-docs"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.paths['/api/v1/cards/{cardId}'].get.responses['403']").exists())
+        .andExpect(
+            jsonPath("$.paths['/api/v1/cards/{cardId}/block'].post.responses['409'].description")
+                .value(org.hamcrest.Matchers.containsString("invalid-status-transition")));
   }
 
   @Test

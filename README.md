@@ -148,11 +148,38 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. O produto cancelado **depois** do cadastro também é barrado: a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos (teste `staleCachedObservationIsRecheckedInCatalog`).
 5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la (testes `knownCancellationRefusesIssuanceWithoutCatalog` e `RedisProductCacheIT`).
+6. **Prazo máximo de 5 minutos depois do cancelamento no catálogo (NFR7):** o teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Com o produto já cancelado no catálogo, a observação `ACTIVE` de 4 minutos ainda autoriza (janela aceita pela BR4.1); passados 5 minutos, a emissão é recusada com `PRODUCT_CANCELED`.
 
-## Status de cartões e portadores
+## Catálogo de produtos
+
+| Endpoint | Regra | Escopo |
+|---|---|---|
+| `POST /api/v1/products` | Cria `ACTIVE`; `bin` com 8 dígitos, único (409 `bin-already-registered`) | `products:write` |
+| `GET /api/v1/products?page=&size=` | Paginado, padrão 20, máximo 100 (`size` maior gera 400), do mais recente para o mais antigo | `products:read` |
+| `GET /api/v1/products/{id}` | 404 se não existe | `products:read` |
+| `PATCH /api/v1/products/{id}` | Só `name` e `description` de produto `ACTIVE`. Campo ausente mantém o valor; `description: null` limpa. `bin` no corpo (inclusive `null`) gera **422 `bin-immutable`**, nunca ignorado. Produto `CANCELED` gera **409 `product-canceled-read-only`** | `products:write` |
+| `POST /api/v1/products/{id}/cancel` | `ACTIVE` → `CANCELED` (ver abaixo) | `products:write` |
+| `DELETE` | Não existe exclusão física: 405 | — |
+
+## Consulta consolidada (`GET /api/v1/cardholders/{id}/overview`)
+
+Sempre 200 quando o portador existe. O estado de negócio (`issuance.status`) fica separado da completude de cada parte (`availability`):
+
+| Caso | `issuance.status` | `card.availability` | `product.availability` |
+|---|---|---|---|
+| Pendente | `PENDING` | `NOT_APPLICABLE` | `CURRENT` ou `STALE` |
+| Falha de negócio | `FAILED` (com `failureReason`) | `NOT_APPLICABLE` | `CURRENT` ou `STALE` |
+| Emitido, card-service fora | `ISSUED` (com `cardId`) | `UNAVAILABLE` | `CURRENT` ou `STALE` |
+| Produto desatualizado | qualquer | qualquer | `STALE` (com `observedAt`) |
+| Produto sem observação | qualquer | qualquer | `UNAVAILABLE` |
+
+O `cardholder-service` guarda a última observação de cada produto (`product_observations`), gravada no cadastro e a cada consulta bem-sucedida ao catálogo (vence a mais recente). O produto sai `CURRENT` quando veio do catálogo na própria requisição e `STALE` quando veio dessa observação guardada ([ADR-002 do Desenho de Domínio](aidlc/spaces/default/intents/260928-cardforge-release-1/inception/domain-design/decisions.md)). Os detalhes do cartão vêm sempre do `card-service`, com timeout.
+
+## Status de produtos, cartões e portadores
 
 | Endpoint | Transição | Escopo |
 |---|---|---|
+| `POST /api/v1/products/{id}/cancel` | `ACTIVE` → `CANCELED` (terminal) | `products:write` |
 | `POST /api/v1/cards/{id}/block` | `ACTIVE` → `BLOCKED` | `cards:write` |
 | `POST /api/v1/cards/{id}/unblock` | `BLOCKED` → `ACTIVE` | `cards:write` |
 | `POST /api/v1/cards/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cards:write` |
@@ -161,6 +188,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | `POST /api/v1/cardholders/{id}/cancel` | `ACTIVE` ou `BLOCKED` → `CANCELED` (terminal) | `cardholders:write` |
 
 - Pedido para o status atual responde **200 sem mudança** (idempotente). A partir de `CANCELED`, `block` e `unblock` respondem **409** `invalid-status-transition`.
+- **Produto:** cancelar um produto já `CANCELED` responde 200 sem mudança. O contrato C1 **superou o FR1.5**, que pedia 409, por coerência com a decisão de status idempotente das Histórias (Q12). Cartões já emitidos continuam válidos (BR1.3), e novas emissões param em até 5 minutos.
 - As transições são métodos do agregado (`block()`, `unblock()`, `cancel()`) e são aplicadas com lock de linha. Só atualizam `status` e `updatedAt`; não há histórico nesta release (D5).
 - Cancelar um cartão libera o índice de "um cartão não cancelado por portador e produto": o portador pode receber um novo cartão do mesmo produto.
 - O status do portador não se propaga para os cartões nem para a emissão pendente (FR4.8, ver limitações).
@@ -178,7 +206,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | TC5: duas solicitações concorrentes para o mesmo portador e produto | `IssuanceIT.concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard` |
 | TC6: cache vencido com catálogo fora: nenhuma emissão, retentativa | `IssuanceIT.staleCacheWithCatalogDownDoesNotIssueAndRetries` |
 | TC7: cancelamento conhecido impede uso de `ACTIVE` antigo | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `RedisProductCacheIT` |
-| TC8: consulta consolidada distingue os casos de completude | `RegistrationIT.overview*` (catálogo e card-service offline ou lentos) |
+| TC8: consulta consolidada distingue os cinco casos (pendente, falha de negócio, card-service fora, produto `STALE`, produto sem observação) | `RegistrationIT.consolidatedViewDistinguishesTheFiveCases` e `RegistrationIT.overview*` (catálogo e card-service offline ou lentos) |
 | TC-PAN: colisão forçada de PAN | `IssuanceIT.panCollisionIsResolvedWithANewCandidate` |
 | Recusa de negócio sem retry | `IssuanceIT.canceledProductFailsWithoutRetry` |
 
@@ -189,7 +217,7 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | Dependência fora | Cadastro (`POST /cardholders`) | Emissão | Consulta consolidada (`/overview`) |
 |---|---|---|---|
 | **SQS** | **202.** O evento fica pendente no outbox (`cardforge_outbox_pending`) e é publicado quando a SQS volta (teste `sqsUnavailableKeepsEventInOutboxUntilItRecovers`). | Não recebe mensagens; retoma sozinha quando a SQS volta. Resultados ficam no outbox do `card-service`. | Funciona: mostra `PENDING` até o resultado chegar. |
-| **Catálogo (`product-service`)** | **202.** Timeout, 5xx ou conexão recusada fazem o cadastro seguir, e a validação fica para a emissão. 401, 403 ou contrato inválido também aceitam, com `ALERT configuration`. | Usa a observação em cache se tiver até 5 min. Sem ela, falha técnica com backoff até o catálogo voltar (testes `catalogServerError…` e `catalogTimeout…`). | 200 com `product.availability = UNAVAILABLE`. |
+| **Catálogo (`product-service`)** | **202.** Timeout, 5xx ou conexão recusada fazem o cadastro seguir, e a validação fica para a emissão. 401, 403 ou contrato inválido também aceitam, com `ALERT configuration`. | Usa a observação em cache se tiver até 5 min. Sem ela, falha técnica com backoff até o catálogo voltar (testes `catalogServerError…` e `catalogTimeout…`). | 200 com `product.availability = STALE` e o `observedAt` da última observação guardada; `UNAVAILABLE` se nunca houve observação. |
 | **Redis** | Não usa. | Consulta o catálogo direto e registra a degradação. | Não usa. |
 | **card-service** | Não depende. | — | 200 com `issuance.status = ISSUED`, `cardId` preservado e `card.availability = UNAVAILABLE`. |
 | **Keycloak** | Tokens já emitidos seguem válidos até expirar (5 min). Sem token novo, a chamada ao catálogo falha como indisponibilidade e o cadastro é aceito. | Mesma regra: falha técnica com backoff. | Partes do produto e do cartão ficam `UNAVAILABLE`. |
@@ -200,6 +228,22 @@ Todas as chamadas remotas têm timeout configurado:
 - Redis: 500 ms;
 - SQS: 5 s no relay e na DLQ;
 - banco: `connection-timeout` de 3 s e `socketTimeout` de 15 s.
+
+## Controles de segurança e privacidade
+
+Estes são **controles de aplicação adotados**, alinhados a práticas de PCI-DSS e LGPD. **Esta release não afirma conformidade integral com PCI-DSS nem com LGPD.**
+
+| Controle | Como está implementado | Onde é verificado |
+|---|---|---|
+| PAN nunca guardado por completo | Só `pan_hmac` (HMAC-SHA256 com chave dedicada) e `pan_last_four`; o PAN existe só em memória na emissão; sem CVV (D3, [ADR-0008](docs/adr/0008-pan-hmac-only.md)) | `LuhnAndPanTest`, `IssuanceIT` (resposta sem `pan`/`panHmac`) |
+| Exibição só dos 4 últimos dígitos | APIs e `/overview` expõem apenas `panLastFour` | `IssuanceIT`, `RegistrationIT` |
+| Chave do PAN fora do repositório e validada | Gerada em `./.local/secrets` (ignorado pelo git); a inicialização falha se estiver ausente ou fora do formato | `HmacPanHasherTest` |
+| CPF protegido | Guardado só com dígitos; respostas com `maskedCpf` (`***.456.789-**`); a data de nascimento nunca é devolvida | `RegistrationIT` |
+| Nada sensível em logs | `toString()` de `Cpf`, `Cardholder`, `Pan` e dos DTOs de cadastro não expõe dados pessoais; logs usam só IDs | `CpfTest`, `CardholderTest`, `LuhnAndPanTest` |
+| Nada sensível em mensagens e erros | Eventos só com IDs; `ProblemDetail` sem CPF, data de nascimento, PAN ou o payload original | `RegistrationIT` (payload do outbox e da mensagem publicada) |
+| Autenticação e autorização | JWT validando emissor, audiência (uma por serviço) e escopo; client credentials entre serviços; 401 e 403 em ProblemDetail | `ProductApiIT` e os ITs de escopo dos demais serviços |
+| Superfície mínima | Actuator só com `health`, `info` e `prometheus`; containers com usuário não root e imagens com versão fixada | Compose e `Dockerfile` |
+| Histórico auditável | **Não implementado nesta release** (D5): as mudanças de status só atualizam `updatedAt` | — |
 
 ## Débitos e desvios conscientes
 
@@ -217,7 +261,7 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 | D6 | **Cobertura só com relatório** (JaCoCo em `target/site/jacoco`), sem piso de 80%. | `team.md`: piso de 80% de linhas por módulo; NEVER merge com o piso rebaixado | Adicionar a regra `check` do JaCoCo no `verify`, com o mesmo arquivo combinado de unitários e integração, e as exclusões `*Application` e `config`. |
 | D7 | **Spotless só formata** (`./mvnw spotless:apply`); não há `spotless:check` no build. | `team.md`: `spotless:check` bloqueia o build | Ligar `spotless:check` na fase `verify`. |
 | D8 | **Sem SpotBugs/FindSecBugs.** O ArchUnit foi mantido. | `team.md`: SpotBugs com FindSecBugs bloqueia o merge | Adicionar o plugin no `verify`, restrito às categorias de segurança e correção de prioridade alta. |
-| D9 | **CI só com o job `verify`:** sem o job do smoke test, sem Trivy e sem Dependabot. | `team.md`: job separado de smoke test; Trivy e Dependabot | Job com `docker compose up -d --build --wait && ./scripts/smoke-test.sh`; Trivy (segredos, dependências e imagens); Dependabot semanal ignorando majors do Spring Boot. |
+| D9 | **CI só com o job `verify`:** sem o job do smoke test, sem Trivy e sem Dependabot. Decidido de novo no B3: o Compose é verificado **manualmente**, no teste de clone limpo antes da entrega (`docker compose up -d --build --wait && ./scripts/smoke-test.sh`). **Risco:** uma quebra no Compose, no realm ou nas filas passa pelo CI e só aparece nesse teste. | `team.md`: job separado de smoke test; Trivy e Dependabot | Job com `docker compose up -d --build --wait && ./scripts/smoke-test.sh` (cerca de 5 min por execução); Trivy (segredos, dependências e imagens); Dependabot semanal ignorando majors do Spring Boot. |
 | D10 | **Smoke test reduzido:** token → produto → cadastro → polling do `/overview` até `ISSUED` → conferência do `panLastFour`. Não verifica a chave no Redis nem o `correlationId` nos logs. | Definição de pronto do B1 | Verificar a chave `cardforge:product:v1:{id}` no Redis e o `correlationId` nos logs dos dois serviços. Hoje o `correlationId` já atravessa a fila, pelo envelope e pelo atributo SQS, e aparece nos logs JSON. |
 | D11 | **O `traceparent` não atravessa a fila.** Ele é propagado só por configuração (Micrometer Tracing): entre serviços via HTTP e nos logs. Na SQS, o consumidor começa um trace novo; o `correlationId` continua ligando o fluxo de ponta a ponta. | ALWAYS propagar correlationId **e contexto de tracing** em HTTP e mensagens SQS | Gravar `traceparent` na linha do outbox, enviá-lo como atributo da mensagem e restaurá-lo no consumidor, ou adotar a observação nativa do Spring Cloud AWS. |
 | D12 | **Sem reconciliação automática** (FR6): nenhum job republica solicitações `PENDING` antigas. A recuperação é manual, pelo [procedimento abaixo](#procedimento-manual-dlq-e-solicitações-pending-antigas). | FR6.1 a FR6.3 e testes críticos TC9 e TC10 | Job agendado (a cada 5 min, lotes de 50 com `SKIP LOCKED`, idade mínima de 3 h, 30 min entre tentativas, suspensão e alerta após 3), republicando pelo outbox. O `card-service` já republica o resultado de solicitações decididas, então a reconciliação não gera cartão duplicado. |
@@ -226,8 +270,6 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 
 Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6) que não entraram na entrega.
 
-- **Consulta consolidada:** o produto sai `CURRENT` ou `UNAVAILABLE`. O caso `STALE` (observação guardada no cadastro, `ProductObservation`) não foi implementado.
-- **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto.
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
 - **Métrica de profundidade das filas e DLQs:** não implementada. Use `ApproximateNumberOfMessages` pela CLI (ver o procedimento manual).

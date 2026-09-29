@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rpe.cardforge.platform.events.DeadLetterPublisher;
 import com.rpe.cardforge.platform.events.EventReader;
 import com.rpe.cardforge.platform.http.ClientCredentialsSupport;
+import com.rpe.cardforge.platform.time.Clocks;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,7 +21,7 @@ class ApplicationConfig {
 
   @Bean
   Clock clock() {
-    return Clock.systemUTC();
+    return Clocks.systemUtcMicros();
   }
 
   @Bean

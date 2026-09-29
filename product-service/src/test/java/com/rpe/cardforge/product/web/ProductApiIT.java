@@ -130,6 +130,153 @@ class ProductApiIT {
   }
 
   @Test
+  void cancelsProductAndRepeatedCancelIsIdempotent() throws Exception {
+    String id = createProduct(randomBin());
+
+    String first =
+        mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELED"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"))
+        .andExpect(jsonPath("$.updatedAt").value((String) JsonPath.read(first, "$.updatedAt")));
+
+    mvc.perform(withScopes(get("/api/v1/products/" + id), "products:read"))
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+  }
+
+  @Test
+  void cancelRequiresWriteScopeAndExistingProduct() throws Exception {
+    mvc.perform(
+            withScopes(post("/api/v1/products/" + UUID.randomUUID() + "/cancel"), "products:read"))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            withScopes(post("/api/v1/products/" + UUID.randomUUID() + "/cancel"), "products:write"))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void listsProductsWithPagination() throws Exception {
+    createProduct(randomBin());
+    String newest = createProduct(randomBin());
+
+    mvc.perform(withScopes(get("/api/v1/products").param("size", "1"), "products:read"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(newest))
+        .andExpect(jsonPath("$.page.page").value(0))
+        .andExpect(jsonPath("$.page.size").value(1))
+        .andExpect(
+            jsonPath("$.page.totalElements").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
+
+    mvc.perform(withScopes(get("/api/v1/products"), "products:read"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.page.size").value(20));
+  }
+
+  @Test
+  void listingRejectsPageSizeAboveOneHundred() throws Exception {
+    mvc.perform(withScopes(get("/api/v1/products").param("size", "101"), "products:read"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(withScopes(get("/api/v1/products").param("page", "-1"), "products:read"))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void updatesNameAndDescriptionKeepingBin() throws Exception {
+    String bin = randomBin();
+    String id = createProduct(bin);
+
+    patch(id, "{\"name\":\"Platinum\",\"description\":\"Upgraded\"}")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("Platinum"))
+        .andExpect(jsonPath("$.description").value("Upgraded"))
+        .andExpect(jsonPath("$.bin").value(bin));
+
+    patch(id, "{\"description\":null}")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("Platinum"))
+        .andExpect(jsonPath("$.description").doesNotExist());
+  }
+
+  @Test
+  void binInUpdateIsRejectedAndNeverIgnored() throws Exception {
+    String bin = randomBin();
+    String id = createProduct(bin);
+
+    patch(id, "{\"name\":\"Platinum\",\"bin\":\"%s\"}".formatted(randomBin()))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/bin-immutable"));
+    patch(id, "{\"bin\":null}")
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/bin-immutable"));
+
+    mvc.perform(withScopes(get("/api/v1/products/" + id), "products:read"))
+        .andExpect(jsonPath("$.name").value("Gold"))
+        .andExpect(jsonPath("$.bin").value(bin));
+  }
+
+  @Test
+  void canceledProductIsReadOnly() throws Exception {
+    String id = createProduct(randomBin());
+    mvc.perform(withScopes(post("/api/v1/products/" + id + "/cancel"), "products:write"))
+        .andExpect(status().isOk());
+
+    patch(id, "{\"name\":\"Too late\"}")
+        .andExpect(status().isConflict())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/product-canceled-read-only"));
+  }
+
+  @Test
+  void invalidUpdateValuesAreUnprocessableAndWrongTypesAreBadRequest() throws Exception {
+    String id = createProduct(randomBin());
+
+    patch(id, "{\"name\":\" \",\"description\":\"%s\"}".formatted("x".repeat(501)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.invalidFields.length()").value(2));
+    patch(id, "{\"name\":123}").andExpect(status().isBadRequest());
+    patch(UUID.randomUUID().toString(), "{\"name\":\"Any\"}").andExpect(status().isNotFound());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions patch(String id, String body)
+      throws Exception {
+    return mvc.perform(
+        withScopes(
+                org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                    "/api/v1/products/" + id),
+                "products:write")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body));
+  }
+
+  @Test
+  void openApiDocumentsProblemResponsesAndBusinessErrors() throws Exception {
+    mvc.perform(get("/v3/api-docs"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.components.schemas.ProblemDetail.properties.invalidFields").exists())
+        .andExpect(
+            jsonPath("$.components.responses.Unauthorized.headers.WWW-Authenticate").exists())
+        .andExpect(jsonPath("$.paths['/api/v1/products'].post.responses['401']").exists())
+        .andExpect(jsonPath("$.paths['/api/v1/products'].post.responses['403']").exists())
+        .andExpect(
+            jsonPath("$.paths['/api/v1/products'].post.responses['409'].description")
+                .value(org.hamcrest.Matchers.containsString("bin-already-registered")))
+        .andExpect(
+            jsonPath("$.paths['/api/v1/products/{productId}'].patch.responses['422'].description")
+                .value(org.hamcrest.Matchers.containsString("bin-immutable")))
+        .andExpect(
+            jsonPath("$.info.description")
+                .value(org.hamcrest.Matchers.containsString("product-canceled-read-only")));
+  }
+
+  @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
         .andExpect(status().isMethodNotAllowed());

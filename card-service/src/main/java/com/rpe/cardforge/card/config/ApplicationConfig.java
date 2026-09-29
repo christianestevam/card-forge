@@ -9,6 +9,7 @@ import com.rpe.cardforge.card.infrastructure.HmacPanHasher;
 import com.rpe.cardforge.platform.events.DeadLetterPublisher;
 import com.rpe.cardforge.platform.events.EventReader;
 import com.rpe.cardforge.platform.http.ClientCredentialsSupport;
+import com.rpe.cardforge.platform.time.Clocks;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
@@ -26,7 +27,7 @@ class ApplicationConfig {
 
   @Bean
   Clock clock() {
-    return Clock.systemUTC();
+    return Clocks.systemUtcMicros();
   }
 
   @Bean
