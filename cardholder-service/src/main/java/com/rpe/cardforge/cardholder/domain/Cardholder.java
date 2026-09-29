@@ -164,6 +164,31 @@ public final class Cardholder {
     return version;
   }
 
+  /** ACTIVE -> BLOCKED. Pedido para o status atual devolve o próprio portador (BR2.5). */
+  public Cardholder block(Instant now) {
+    return transition(CardholderStatus.BLOCKED, now);
+  }
+
+  /** BLOCKED -> ACTIVE. */
+  public Cardholder unblock(Instant now) {
+    return transition(CardholderStatus.ACTIVE, now);
+  }
+
+  /** ACTIVE ou BLOCKED -> CANCELED, terminal. */
+  public Cardholder cancel(Instant now) {
+    return transition(CardholderStatus.CANCELED, now);
+  }
+
+  private Cardholder transition(CardholderStatus target, Instant now) {
+    if (status == target) {
+      return this;
+    }
+    if (status == CardholderStatus.CANCELED) {
+      throw new InvalidStatusTransitionException(status, target);
+    }
+    return new Cardholder(id, cpf, fullName, birthDate, productId, target, createdAt, now, version);
+  }
+
   @Override
   public String toString() {
     return "Cardholder[id=" + id + ", status=" + status + "]";

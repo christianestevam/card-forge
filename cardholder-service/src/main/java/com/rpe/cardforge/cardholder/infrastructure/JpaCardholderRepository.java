@@ -45,18 +45,32 @@ class JpaCardholderRepository implements CardholderRepository {
 
   @Override
   public Optional<Cardholder> findById(UUID id) {
-    return jpa.findById(id)
-        .map(
-            e ->
-                new Cardholder(
-                    e.id,
-                    Cpf.of(e.cpf),
-                    e.fullName,
-                    e.birthDate,
-                    e.productId,
-                    CardholderStatus.valueOf(e.status),
-                    e.createdAt,
-                    e.updatedAt,
-                    e.version));
+    return jpa.findById(id).map(JpaCardholderRepository::toDomain);
+  }
+
+  @Override
+  public Optional<Cardholder> findByIdForUpdate(UUID id) {
+    return jpa.findByIdForUpdate(id).map(JpaCardholderRepository::toDomain);
+  }
+
+  @Override
+  public void updateStatus(Cardholder c) {
+    CardholderJpaEntity e =
+        jpa.findById(c.id()).orElseThrow(() -> new IllegalStateException("Missing " + c.id()));
+    e.status = c.status().name();
+    e.updatedAt = c.updatedAt();
+  }
+
+  private static Cardholder toDomain(CardholderJpaEntity e) {
+    return new Cardholder(
+        e.id,
+        Cpf.of(e.cpf),
+        e.fullName,
+        e.birthDate,
+        e.productId,
+        CardholderStatus.valueOf(e.status),
+        e.createdAt,
+        e.updatedAt,
+        e.version);
   }
 }

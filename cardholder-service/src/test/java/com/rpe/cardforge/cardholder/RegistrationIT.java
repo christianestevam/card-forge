@@ -409,6 +409,51 @@ class RegistrationIT {
   }
 
   @Test
+  void cardholderStatusTransitionsAreIdempotentAndCanceledIsTerminal() throws Exception {
+    Registered r = registerActive();
+
+    changeStatus(r.cardholderId(), "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(r.cardholderId(), "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(r.cardholderId(), "unblock")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    changeStatus(r.cardholderId(), "cancel")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"))
+        .andExpect(jsonPath("$.maskedCpf").isNotEmpty());
+    changeStatus(r.cardholderId(), "cancel").andExpect(status().isOk());
+    changeStatus(r.cardholderId(), "unblock")
+        .andExpect(status().isConflict())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/invalid-status-transition"));
+
+    mvc.perform(
+            MockMvcRequestBuilders.get("/api/v1/cardholders/" + r.cardholderId())
+                .with(scopes("cardholders:read")))
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+  }
+
+  @Test
+  void cardholderStatusChangeRequiresWriteScopeAndExistingCardholder() throws Exception {
+    mvc.perform(
+            MockMvcRequestBuilders.post("/api/v1/cardholders/" + UUID.randomUUID() + "/block")
+                .with(scopes("cardholders:read")))
+        .andExpect(status().isForbidden());
+    changeStatus(UUID.randomUUID(), "block").andExpect(status().isNotFound());
+  }
+
+  private ResultActions changeStatus(UUID cardholderId, String action) throws Exception {
+    return mvc.perform(
+        MockMvcRequestBuilders.post("/api/v1/cardholders/" + cardholderId + "/" + action)
+            .with(scopes("cardholders:write")));
+  }
+
+  @Test
   void unknownCardholderIsNotFound() throws Exception {
     overview(UUID.randomUUID()).andExpect(status().isNotFound());
   }

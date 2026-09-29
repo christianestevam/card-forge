@@ -12,4 +12,9 @@ public interface CardholderRepository {
   void insert(Cardholder cardholder);
 
   Optional<Cardholder> findById(UUID id);
+
+  /** Lê com lock de escrita, para aplicar transições concorrentes em série. */
+  Optional<Cardholder> findByIdForUpdate(UUID id);
+
+  void updateStatus(Cardholder cardholder);
 }
