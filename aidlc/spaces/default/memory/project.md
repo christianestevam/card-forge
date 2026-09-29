@@ -1,5 +1,8 @@
 # Project-Level Rules
 
+> **Nota (construção da R1):** na construção da R1, os desvios listados na seção
+> "Débitos e desvios conscientes" do `README.md` prevalecem sobre estas regras.
+
 > Project-specific specialisation and corrections. Loaded after `org.md` and
 > `team.md` as strict-additive guidance; contradictions with broader policy
 > are rejected. Populated by practices-discovery and the self-learning loop.

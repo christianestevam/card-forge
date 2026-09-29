@@ -1,0 +1,60 @@
+package com.rpe.cardforge.card.domain;
+
+import java.time.Instant;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * Cartão emitido. Guarda só o identificador de unicidade do PAN ({@code panHmac}) e os 4 últimos
+ * dígitos; o PAN completo não é persistido e não há CVV (BR5.4).
+ */
+public record Card(
+    UUID id,
+    UUID cardholderId,
+    UUID productId,
+    UUID issuanceRequestId,
+    String panHmac,
+    String panLastFour,
+    YearMonth expirationDate,
+    CardStatus status,
+    Instant createdAt,
+    Instant updatedAt) {
+
+  public static final int VALIDITY_YEARS = 5;
+
+  public Card {
+    Objects.requireNonNull(id);
+    Objects.requireNonNull(cardholderId);
+    Objects.requireNonNull(productId);
+    Objects.requireNonNull(issuanceRequestId);
+    Objects.requireNonNull(panHmac);
+    Objects.requireNonNull(panLastFour);
+    Objects.requireNonNull(expirationDate);
+    Objects.requireNonNull(status);
+  }
+
+  /** Novo cartão ACTIVE, com validade de 5 anos a partir do mês da emissão (BR5.2, BR5.3). */
+  public static Card issue(
+      UUID id,
+      UUID cardholderId,
+      UUID productId,
+      UUID issuanceRequestId,
+      String panHmac,
+      Pan pan,
+      Instant now) {
+    YearMonth expiration = YearMonth.from(now.atZone(ZoneOffset.UTC)).plusYears(VALIDITY_YEARS);
+    return new Card(
+        id,
+        cardholderId,
+        productId,
+        issuanceRequestId,
+        panHmac,
+        pan.lastFour(),
+        expiration,
+        CardStatus.ACTIVE,
+        now,
+        now);
+  }
+}
