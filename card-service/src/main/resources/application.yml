@@ -1,0 +1,77 @@
+spring:
+  application:
+    name: card-service
+  config:
+    # A chave HMAC do PAN vem de arquivo montado (./.local/secrets -> /run/secrets/cardforge).
+    import: optional:configtree:/run/secrets/cardforge/
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-timeout: 3000
+  flyway:
+    locations: classpath:db/migration,classpath:db/platform
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 500ms
+      connect-timeout: 500ms
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:us-east-1}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI}
+          jwk-set-uri: ${JWT_JWK_SET_URI}
+          audiences: card-service
+      client:
+        registration:
+          cardforge:
+            provider: keycloak
+            client-id: ${OAUTH_CLIENT_ID}
+            client-secret: ${OAUTH_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: products:read
+        provider:
+          keycloak:
+            token-uri: ${OAUTH_TOKEN_URI}
+
+cardforge:
+  pan:
+    hmac-key: ${pan-hmac-key}
+  outbox:
+    enabled: true
+  catalog:
+    base-url: ${CATALOG_BASE_URL}
+    connect-timeout: 1s
+    read-timeout: 2s
+  issuance:
+    requested-queue: card-issuance-requested
+    requested-dead-letter-queue: card-issuance-requested-dlq
+    completed-queue: card-issuance-completed
+  openapi:
+    token-url: http://localhost:8080/realms/cardforge/protocol/openid-connect/token
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+  health:
+    redis:
+      enabled: false
+  tracing:
+    sampling:
+      probability: 1.0
