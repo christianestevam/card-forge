@@ -29,9 +29,12 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -55,6 +58,7 @@ import software.amazon.awssdk.services.sqs.model.Message;
  * outbox é acionado manualmente para controlar o momento da publicação.
  */
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(
     properties = {
       "JWT_ISSUER_URI=http://issuer.test/realms/cardforge",
@@ -151,6 +155,24 @@ class RegistrationIT {
         .andExpect(jsonPath("$.birthDate").doesNotExist())
         .andExpect(jsonPath("$.cpf").doesNotExist())
         .andExpect(jsonPath("$.status").value("ACTIVE"));
+  }
+
+  /**
+   * R2: o cadastro duplicado responde 409 sem que o CPF completo apareça no log da aplicação nem no
+   * log do PostgreSQL.
+   */
+  @Test
+  void duplicateCpfNeverLeaksTheCpfToLogs(CapturedOutput output) throws Exception {
+    UUID productId = activeProduct();
+    String cpf = TestCpfs.random();
+    register(cpf, "Maria da Silva", LocalDate.of(1990, 5, 20), productId)
+        .andExpect(status().isAccepted());
+
+    register(cpf, "Outra Pessoa", LocalDate.of(1985, 1, 1), productId)
+        .andExpect(status().isConflict());
+
+    assertThat(output.getAll()).doesNotContain(cpf);
+    assertThat(postgres.getLogs()).doesNotContain(cpf);
   }
 
   @Test

@@ -5,41 +5,51 @@ import com.rpe.cardforge.cardholder.application.CpfAlreadyRegisteredException;
 import com.rpe.cardforge.cardholder.domain.Cardholder;
 import com.rpe.cardforge.cardholder.domain.CardholderStatus;
 import com.rpe.cardforge.cardholder.domain.Cpf;
-import com.rpe.cardforge.platform.persistence.UniqueConstraints;
+import java.sql.Timestamp;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 @Repository
 class JpaCardholderRepository implements CardholderRepository {
 
-  static final String UK_CPF = "uk_cardholders_cpf";
-
   private final SpringDataCardholderRepository jpa;
+  private final JdbcClient jdbc;
 
-  JpaCardholderRepository(SpringDataCardholderRepository jpa) {
+  JpaCardholderRepository(SpringDataCardholderRepository jpa, JdbcClient jdbc) {
     this.jpa = jpa;
+    this.jdbc = jdbc;
   }
 
+  /**
+   * Insere com {@code ON CONFLICT (cpf) DO NOTHING}: um CPF repetido não gera erro no banco, então
+   * o valor não aparece no log do PostgreSQL nem no do Hibernate. A constraint continua sendo a
+   * garantia de unicidade, também sob concorrência.
+   */
   @Override
   public void insert(Cardholder c) {
-    CardholderJpaEntity e = new CardholderJpaEntity();
-    e.id = c.id();
-    e.cpf = c.cpf().digits();
-    e.fullName = c.fullName();
-    e.birthDate = c.birthDate();
-    e.productId = c.productId();
-    e.status = c.status().name();
-    e.createdAt = c.createdAt();
-    e.updatedAt = c.updatedAt();
-    try {
-      jpa.saveAndFlush(e);
-    } catch (DataIntegrityViolationException ex) {
-      if (UniqueConstraints.isViolation(ex, UK_CPF)) {
-        throw new CpfAlreadyRegisteredException();
-      }
-      throw ex;
+    int inserted =
+        jdbc.sql(
+                """
+                INSERT INTO cardholders
+                  (id, cpf, full_name, birth_date, product_id, status, created_at, updated_at,
+                   version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT (cpf) DO NOTHING
+                """)
+            .params(
+                c.id(),
+                c.cpf().digits(),
+                c.fullName(),
+                c.birthDate(),
+                c.productId(),
+                c.status().name(),
+                Timestamp.from(c.createdAt()),
+                Timestamp.from(c.updatedAt()))
+            .update();
+    if (inserted == 0) {
+      throw new CpfAlreadyRegisteredException();
     }
   }
 
