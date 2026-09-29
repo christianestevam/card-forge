@@ -320,6 +320,106 @@ class IssuanceIT {
         .containsOnly(events.getFirst().get("cardId").asText());
   }
 
+  /**
+   * TC2: a mensagem volta depois que o desfecho foi gravado (falha antes do ACK). A reentrega não
+   * reavalia nem gera outro cartão: republica o mesmo resultado.
+   */
+  @Test
+  void redeliveryAfterCommitRepublishesWithoutNewEffect() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-tc2");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    awaitCompletedEvents(r, 1);
+
+    send(r.body(), "corr-tc2-redelivery");
+
+    List<JsonNode> events = awaitCompletedEvents(r, 2);
+    assertThat(events).extracting(e -> e.get("cardId").asText()).containsOnly(cardId.toString());
+    assertThat(cardCount(r)).isEqualTo(1);
+    assertThat(catalogCalls(productPath(r.productId()))).hasSize(1);
+  }
+
+  /**
+   * TC4: recusa de negócio persistida e reentregue sem mudar o desfecho, mesmo com o produto ativo.
+   */
+  @Test
+  void redeliveredBusinessRefusalKeepsItsOutcome() {
+    Request r = Request.random();
+    stubProduct(r.productId(), "CANCELED");
+    send(r.body(), "corr-tc4");
+    awaitDecision(r, "FAILED");
+
+    stubProduct(r.productId(), "ACTIVE"); // o catálogo muda, mas a solicitação já foi decidida
+    send(r.body(), "corr-tc4-redelivery");
+
+    List<JsonNode> events = awaitCompletedEvents(r, 2);
+    assertThat(events)
+        .extracting(e -> e.get("failureReason").asText())
+        .containsOnly("PRODUCT_CANCELED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
+  }
+
+  /** TC5: duas solicitações concorrentes para o mesmo portador e produto: só uma emite. */
+  @Test
+  void concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard() {
+    Request first = Request.random();
+    Request second = new Request(UUID.randomUUID(), first.cardholderId(), first.productId());
+    stubProduct(first.productId(), "ACTIVE");
+
+    CompletableFuture.allOf(
+            CompletableFuture.runAsync(() -> send(first.body(), "corr-tc5-a")),
+            CompletableFuture.runAsync(() -> send(second.body(), "corr-tc5-b")))
+        .join();
+
+    await()
+        .atMost(Duration.ofSeconds(20))
+        .until(() -> decisionCount(first) == 1 && decisionCount(second) == 1);
+    List<String> outcomes =
+        List.of(
+            jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                .param(first.issuanceRequestId())
+                .query(String.class)
+                .single(),
+            jdbc.sql("SELECT status FROM issuance_processing WHERE issuance_request_id = ?")
+                .param(second.issuanceRequestId())
+                .query(String.class)
+                .single());
+    assertThat(outcomes).containsExactlyInAnyOrder("ISSUED", "FAILED");
+    assertThat(cardCount(first)).isEqualTo(1);
+  }
+
+  /**
+   * TC6: observação vencida no cache e catálogo fora: nenhuma emissão, a mensagem volta para
+   * retentativa e emite quando o catálogo se recupera.
+   */
+  @Test
+  void staleCacheWithCatalogDownDoesNotIssueAndRetries() throws Exception {
+    Request r = Request.random();
+    String path = productPath(r.productId());
+    cache(r.productId(), "ACTIVE", Instant.now().minus(Duration.ofMinutes(6)));
+    catalog.stubFor(
+        get(path)
+            .inScenario(path)
+            .whenScenarioStateIs(STARTED)
+            .willReturn(serverError())
+            .willSetStateTo("up"));
+    catalog.stubFor(
+        get(path)
+            .inScenario(path)
+            .whenScenarioStateIs("up")
+            .willReturn(okJson(product(r.productId(), "ACTIVE"))));
+
+    send(r.body(), "corr-tc6");
+
+    await().atMost(Duration.ofSeconds(10)).until(() -> catalogCalls(path).size() >= 1);
+    assertThat(decisionCount(r)).isZero();
+    assertThat(cardCount(r)).isZero();
+    awaitDecision(r, "ISSUED");
+    assertThat(catalogCalls(path)).hasSize(2);
+  }
+
   /** Um segundo pedido para o mesmo portador e produto é recusado pela regra de unicidade. */
   @Test
   void secondRequestForSameCardholderAndProductFails() {
