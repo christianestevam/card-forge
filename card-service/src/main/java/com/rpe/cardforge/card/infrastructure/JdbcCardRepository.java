@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.YearMonth;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -76,6 +77,27 @@ class JdbcCardRepository implements CardRepository {
   @Override
   public Optional<Card> findById(UUID id) {
     return jdbc.sql("SELECT * FROM cards WHERE id = ?").param(id).query(this::map).optional();
+  }
+
+  @Override
+  public List<Card> findByCardholderId(UUID cardholderId, int offset, int limit) {
+    return jdbc.sql(
+            """
+            SELECT * FROM cards WHERE cardholder_id = ?
+            ORDER BY created_at DESC, id
+            OFFSET ? LIMIT ?
+            """)
+        .params(cardholderId, offset, limit)
+        .query(this::map)
+        .list();
+  }
+
+  @Override
+  public long countByCardholderId(UUID cardholderId) {
+    return jdbc.sql("SELECT count(*) FROM cards WHERE cardholder_id = ?")
+        .param(cardholderId)
+        .query(Long.class)
+        .single();
   }
 
   @Override

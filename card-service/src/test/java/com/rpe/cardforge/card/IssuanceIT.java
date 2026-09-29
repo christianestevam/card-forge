@@ -576,6 +576,48 @@ class IssuanceIT {
   }
 
   @Test
+  void listsCardsOfCardholderWithPagination() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-list");
+    UUID cardId = awaitDecision(r, "ISSUED");
+
+    listCards(r.cardholderId().toString(), null)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(cardId.toString()))
+        .andExpect(jsonPath("$.content[0].panLastFour").exists())
+        .andExpect(jsonPath("$.page.size").value(20))
+        .andExpect(jsonPath("$.page.totalElements").value(1))
+        .andExpect(jsonPath("$.page.totalPages").value(1));
+
+    listCards(UUID.randomUUID().toString(), null)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(0))
+        .andExpect(jsonPath("$.page.totalPages").value(0));
+  }
+
+  @Test
+  void cardListingRejectsOversizedPageAndMissingCardholder() throws Exception {
+    listCards(UUID.randomUUID().toString(), "101").andExpect(status().isBadRequest());
+    listCards(null, null).andExpect(status().isBadRequest());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions listCards(
+      String cardholderId, String size) throws Exception {
+    var request =
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/cards")
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read")));
+    if (cardholderId != null) {
+      request.param("cardholderId", cardholderId);
+    }
+    if (size != null) {
+      request.param("size", size);
+    }
+    return mvc.perform(request);
+  }
+
+  @Test
   void unknownCardIsNotFound() throws Exception {
     mvc.perform(
             org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(

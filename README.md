@@ -227,7 +227,7 @@ Por restrição de prazo (entrega em 29/09/2026, uma pessoa), esta construção 
 Não são desvios de regra: são funcionalidades das unidades seguintes (U2 a U6) que não entraram na entrega.
 
 - **Consulta consolidada:** o produto sai `CURRENT` ou `UNAVAILABLE`. O caso `STALE` (observação guardada no cadastro, `ProductObservation`) não foi implementado.
-- **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto, e listagem de cartões por portador.
+- **Endpoints ainda não entregues:** listagem, atualização e cancelamento de produto.
 - **Circuit breaker (Resilience4j)** por dependência: não implementado. Os timeouts curtos e a retentativa pela fila limitam o impacto.
 - **Outbox sem limpeza:** as linhas enviadas não são removidas.
 - **Métricas de ocupação do BIN (alerta em 70%) e profundidade das filas:** não implementadas.

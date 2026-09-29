@@ -312,6 +312,50 @@
               }
             }
           ]
+        },
+        {
+          "name": "7. List cards of cardholder",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cardUrl}}/api/v1/cards?cardholderId={{cardholderId}}&page=0&size=20",
+              "host": [
+                "{{cardUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cards"
+              ],
+              "query": [
+                {
+                  "key": "cardholderId",
+                  "value": "{{cardholderId}}"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('one card', () => pm.expect(pm.response.json().page.totalElements).to.eql(1));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
