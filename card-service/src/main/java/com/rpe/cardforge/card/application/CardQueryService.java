@@ -1,6 +1,7 @@
 package com.rpe.cardforge.card.application;
 
 import com.rpe.cardforge.card.domain.Card;
+import com.rpe.cardforge.platform.paging.PageBounds;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -30,8 +31,9 @@ public class CardQueryService {
 
   /** Página de cartões do portador; portador sem cartões devolve página vazia. */
   public CardPage listByCardholder(UUID cardholderId, int page, int size) {
+    long offset = PageBounds.offset(page, size);
     long total = cards.countByCardholderId(cardholderId);
-    List<Card> content = cards.findByCardholderId(cardholderId, page * size, size);
+    List<Card> content = cards.findByCardholderId(cardholderId, offset, size);
     return new CardPage(content, page, size, total);
   }
 

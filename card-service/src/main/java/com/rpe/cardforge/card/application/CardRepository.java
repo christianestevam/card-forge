@@ -21,7 +21,7 @@ public interface CardRepository {
   Optional<Card> findById(UUID id);
 
   /** Cartões do portador, do mais recente para o mais antigo. */
-  List<Card> findByCardholderId(UUID cardholderId, int offset, int limit);
+  List<Card> findByCardholderId(UUID cardholderId, long offset, int limit);
 
   long countByCardholderId(UUID cardholderId);
 

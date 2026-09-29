@@ -1,6 +1,7 @@
 package com.rpe.cardforge.platform.problem;
 
 import com.rpe.cardforge.platform.correlation.CorrelationId;
+import com.rpe.cardforge.platform.paging.PageBounds;
 import java.net.URI;
 import java.util.List;
 import org.slf4j.Logger;
@@ -54,6 +55,17 @@ public class PlatformExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 Problems.INVALID_HEADER,
                 "Invalid header",
+                ex.getMessage()));
+  }
+
+  @ExceptionHandler(PageBounds.PageOutOfRangeException.class)
+  ResponseEntity<ProblemDetail> handlePageOutOfRange(PageBounds.PageOutOfRangeException ex) {
+    return ResponseEntity.badRequest()
+        .body(
+            Problems.of(
+                HttpStatus.BAD_REQUEST,
+                Problems.MALFORMED_REQUEST,
+                "Page out of range",
                 ex.getMessage()));
   }
 

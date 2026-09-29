@@ -711,6 +711,20 @@ class IssuanceIT {
     listCards(null, null).andExpect(status().isBadRequest());
   }
 
+  /** R7: página enorme passa na validação de page e size, mas não pode virar 500. */
+  @Test
+  void cardListingRejectsPagesBeyondTheSupportedOffset() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/cards")
+                .param("cardholderId", UUID.randomUUID().toString())
+                .param("page", String.valueOf(Integer.MAX_VALUE))
+                .param("size", "100")
+                .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))))
+        .andExpect(status().isBadRequest())
+        .andExpect(
+            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/malformed-request"));
+  }
+
   private org.springframework.test.web.servlet.ResultActions listCards(
       String cardholderId, String size) throws Exception {
     var request =

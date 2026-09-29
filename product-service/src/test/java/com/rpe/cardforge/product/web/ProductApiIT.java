@@ -276,6 +276,20 @@ class ProductApiIT {
                 .value(org.hamcrest.Matchers.containsString("product-canceled-read-only")));
   }
 
+  /** R7: página enorme passa na validação de page e size, mas não pode virar 500. */
+  @Test
+  void productListingRejectsPagesBeyondTheSupportedOffset() throws Exception {
+    mvc.perform(
+            withScopes(
+                get("/api/v1/products")
+                    .param("page", String.valueOf(Integer.MAX_VALUE))
+                    .param("size", "100"),
+                "products:read"))
+        .andExpect(status().isBadRequest())
+        .andExpect(
+            jsonPath("$.type").value("https://cardforge.rpe.com.br/problems/malformed-request"));
+  }
+
   @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
