@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -139,13 +140,22 @@ class IssuanceIT {
   /** Relógio real com um deslocamento ajustável pelo teste. */
   static class AdjustableClock extends Clock {
     private final AtomicReference<Duration> offset = new AtomicReference<>(Duration.ZERO);
+    private final AtomicInteger readsUntilJump = new AtomicInteger(-1);
+    private volatile Duration jump = Duration.ZERO;
 
     void advance(Duration amount) {
       offset.updateAndGet(current -> current.plus(amount));
     }
 
+    /** Avança o relógio em {@code amount} na leitura seguinte às próximas {@code reads}. */
+    void jumpAfterReads(int reads, Duration amount) {
+      jump = amount;
+      readsUntilJump.set(reads);
+    }
+
     void reset() {
       offset.set(Duration.ZERO);
+      readsUntilJump.set(-1);
     }
 
     @Override
@@ -160,6 +170,9 @@ class IssuanceIT {
 
     @Override
     public Instant instant() {
+      if (readsUntilJump.getAndUpdate(n -> n >= 0 ? n - 1 : n) == 0) {
+        advance(jump);
+      }
       return Instant.now().truncatedTo(ChronoUnit.MICROS).plus(offset.get());
     }
   }
@@ -515,6 +528,25 @@ class IssuanceIT {
         objectMapper.readTree(
             redisTemplate.opsForValue().get("cardforge:product:v1:" + r.productId()));
     assertThat(tombstone.get("status").asText()).isEqualTo("CANCELED");
+  }
+
+  /**
+   * R4: a observação ACTIVE tinha 4 min 59 s na verificação de elegibilidade, mas passou da janela
+   * de 5 minutos antes da transação de emissão. A emissão não pode usá-la: reconsulta o catálogo,
+   * que agora responde CANCELED.
+   */
+  @Test
+  void observationThatExpiresBeforeTheIssuingTransactionIsNotUsed() throws Exception {
+    Request r = Request.random();
+    cache(r.productId(), "ACTIVE", Instant.now().minus(Duration.ofMinutes(5).minusSeconds(1)));
+    stubProduct(r.productId(), "CANCELED");
+
+    clock.jumpAfterReads(1, Duration.ofSeconds(2)); // a leitura da transação já vê a janela vencida
+    send(r.body(), "corr-r4");
+
+    awaitDecision(r, "FAILED");
+    assertThat(failureReason(r)).isEqualTo("PRODUCT_CANCELED");
+    assertThat(cardCount(r)).isZero();
   }
 
   /**

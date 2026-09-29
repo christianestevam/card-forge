@@ -55,7 +55,7 @@ public class ProductEligibility {
     if (cached.isPresent()
         && cached.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
       meters.counter("cardforge.product.cache", "result", "hit").increment();
-      return new Eligibility.Eligible(cached.get().bin());
+      return new Eligibility.Eligible(cached.get().bin(), cached.get().validatedAt());
     }
     meters.counter("cardforge.product.cache", "result", "miss").increment();
 
@@ -102,10 +102,10 @@ public class ProductEligibility {
       saved = cache.save(observed);
     } catch (ProductCache.CacheUnavailableException e) {
       degraded("write", e);
-      return new Eligibility.Eligible(observed.bin());
+      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
     }
     if (saved) {
-      return new Eligibility.Eligible(observed.bin());
+      return new Eligibility.Eligible(observed.bin(), observed.validatedAt());
     }
 
     Optional<ProductObservation> winner;
@@ -120,7 +120,7 @@ public class ProductEligibility {
     }
     if (winner.isPresent()
         && winner.get().authorizesIssuanceAt(clock.instant(), properties.eligibilityWindow())) {
-      return new Eligibility.Eligible(winner.get().bin());
+      return new Eligibility.Eligible(winner.get().bin(), winner.get().validatedAt());
     }
     throw new TransientIssuanceException(
         "Product observation superseded by a newer one; deciding again later");
