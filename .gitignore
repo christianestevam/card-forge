@@ -91,3 +91,10 @@ target/
 .env
 .local/
 *.iml
+
+# Configuração local do AI-DLC para o Claude Code (gerada por `aidlc config --harness claude`)
+.claude/
+# Configuração local do GPT Codex
+.agents/
+.codex/
+AGENTS.md
