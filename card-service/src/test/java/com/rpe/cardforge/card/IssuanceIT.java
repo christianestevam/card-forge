@@ -727,6 +727,87 @@ class IssuanceIT {
                 .value(org.hamcrest.Matchers.containsString("invalid-status-transition")));
   }
 
+  /** R3: a consulta do cartão traz o produto do cache (atual até 5 min). */
+  @Test
+  void cardQueryShowsCurrentProductFromCache() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-current");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    int callsAfterIssuance = catalogCalls(productPath(r.productId())).size();
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.observedAt").isNotEmpty())
+        .andExpect(jsonPath("$.product.data.id").value(r.productId().toString()))
+        .andExpect(jsonPath("$.product.data.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.product.data.bin").isNotEmpty());
+    assertThat(catalogCalls(productPath(r.productId()))).hasSize(callsAfterIssuance);
+  }
+
+  /** R3: observação com mais de 5 minutos continua servindo à consulta, sinalizada como STALE. */
+  @Test
+  void cardQueryShowsStaleProductFromOldCacheEntry() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-stale");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    Instant old = Instant.now().minus(Duration.ofMinutes(30));
+    cache(r.productId(), "ACTIVE", old);
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("STALE"))
+        .andExpect(jsonPath("$.product.observedAt").value(old.toString()));
+  }
+
+  /** R3: sem registro no cache, a consulta busca o catálogo; sem nenhum dos dois, UNAVAILABLE. */
+  @Test
+  void cardQueryFallsBackToCatalogAndThenToUnavailable() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-catalog");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    redisTemplate.delete("cardforge:product:v1:" + r.productId());
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.data.name").value("Gold"));
+
+    redisTemplate.delete("cardforge:product:v1:" + r.productId());
+    catalog.stubFor(get(productPath(r.productId())).willReturn(serverError()));
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.panLastFour").isNotEmpty())
+        .andExpect(jsonPath("$.product.availability").value("UNAVAILABLE"))
+        .andExpect(jsonPath("$.product.data").doesNotExist());
+  }
+
+  /** R3: cartão de produto cancelado continua consultável, com o produto CANCELED. */
+  @Test
+  void cardOfCanceledProductRemainsQueryable() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-r3-canceled");
+    UUID cardId = awaitDecision(r, "ISSUED");
+    cache(r.productId(), "CANCELED", Instant.now());
+
+    getCard(cardId)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.product.availability").value("CURRENT"))
+        .andExpect(jsonPath("$.product.data.status").value("CANCELED"));
+  }
+
+  private org.springframework.test.web.servlet.ResultActions getCard(UUID cardId) throws Exception {
+    return mvc.perform(
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                "/api/v1/cards/" + cardId)
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))));
+  }
+
   @Test
   void unknownCardIsNotFound() throws Exception {
     mvc.perform(

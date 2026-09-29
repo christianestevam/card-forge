@@ -9,14 +9,24 @@ import org.springframework.stereotype.Service;
 public class CardQueryService {
 
   private final CardRepository cards;
+  private final ProductDetails products;
 
-  public CardQueryService(CardRepository cards) {
+  public CardQueryService(CardRepository cards, ProductDetails products) {
     this.cards = cards;
+    this.products = products;
   }
 
   public Card get(UUID id) {
     return cards.findById(id).orElseThrow(() -> new CardNotFoundException(id));
   }
+
+  /** Cartão com os detalhes do produto (cache ou catálogo), sem afetar a regra de emissão. */
+  public CardDetails getWithProduct(UUID id) {
+    Card card = get(id);
+    return new CardDetails(card, products.forQuery(card.productId()));
+  }
+
+  public record CardDetails(Card card, ProductDetails.ProductView product) {}
 
   /** Página de cartões do portador; portador sem cartões devolve página vazia. */
   public CardPage listByCardholder(UUID cardholderId, int page, int size) {
