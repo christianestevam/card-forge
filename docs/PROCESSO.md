@@ -28,7 +28,7 @@ As regras permanentes do projeto (`ALWAYS`/`NEVER`, stack, decisões) estão em 
 | B1 | `v1.0.0` | Monorepo, `cardforge-platform`, ambiente Compose completo, fluxo ponta a ponta (produto → cadastro → SQS → emissão com cache → consulta consolidada), smoke test, CI e testes de falha (catálogo 5xx/timeout, produto cancelado, mensagem duplicada, SQS fora no cadastro) |
 | B2 | `v1.1.0` | Lápide do cache (TC7), degradação da consulta consolidada, transições de status de cartão e portador, testes críticos TC2 a TC6 e TC-PAN, listagem de cartões, métrica de ocupação de BIN, ADRs |
 | B3 | `v1.2.0` | Cancelamento, listagem e atualização de produto (`bin-immutable`), caso `STALE` da consulta consolidada (TC8), OpenAPI com os tipos de erro, relógio com precisão de microssegundos |
-| B4 | — | Correções da revisão técnica pré-entrega (ver abaixo) |
+| B4 | — | Correções da revisão técnica pré-entrega (ver abaixo), README reorganizado para a avaliação e este documento |
 
 O trabalho de outro agente, feito em paralelo no mesmo diretório durante o B1, foi descartado do histórico da entrega com um `revert` explícito (commit `d632e3a`), para manter uma única linha de decisões.
 
@@ -76,16 +76,22 @@ Por restrição de prazo, a construção da R1 aplicou os desvios abaixo, aprova
 
 ## Revisão técnica pré-entrega (B4)
 
-Uma revisão independente do commit `4ef799c` apontou defeitos, que o B4 trata com teste de regressão para cada um:
+Uma revisão independente do commit `4ef799c` apontou defeitos e melhorias. O B4 tratou todos, cada defeito com teste de regressão. Em R1, R2 e R3, o teste foi escrito antes e visto falhando pela asserção.
 
-| Achado | Tema |
-|---|---|
-| R1 | Resposta `ACTIVE` concorrente ignorava uma lápide `CANCELED` já gravada |
-| R2 | CPF completo nos logs do Hibernate e do PostgreSQL em cadastro duplicado |
-| R3 | Consulta do cartão sem os detalhes do produto |
-| R4 | Janela de 5 minutos verificada antes da transação de emissão |
-| R5 | Resposta inválida do catálogo virando erro inesperado ou fato de negócio |
-| R6 | Mensagem com corpo `null` escapando da DLQ imediata |
-| R7 | Overflow na paginação de cartões |
+| Achado | Tema | Correção | Teste |
+|---|---|---|---|
+| R1 | Resposta `ACTIVE` concorrente ignorava uma lápide `CANCELED` já gravada | Se o cache recusa a gravação, a decisão segue a observação vencedora | `IssuanceIT.activeResponseLosingToAKnownCancellationDoesNotIssue` |
+| R2 | CPF completo nos logs do Hibernate e do PostgreSQL em cadastro duplicado | Inserção com `ON CONFLICT (cpf) DO NOTHING`: o banco não gera erro | `RegistrationIT.duplicateCpfNeverLeaksTheCpfToLogs` |
+| R3 | Consulta do cartão sem os detalhes do produto | Seção `product` no `GET /cards/{id}`, do cache ou do catálogo | `IssuanceIT.cardQuery…`, `cardOfCanceledProductRemainsQueryable` |
+| R4 | Janela de 5 minutos verificada antes da transação de emissão | `Eligible` carrega o `validatedAt`; a idade é conferida dentro da transação | `IssuanceIT.observationThatExpiresBeforeTheIssuingTransactionIsNotUsed` |
+| R5 | Resposta inválida do catálogo virando erro inesperado ou fato de negócio | Status remoto só `ACTIVE`/`CANCELED` e BIN com 8 dígitos; o resto é erro de contrato | `IssuanceIT.catalogResponseOutOfContractNeverDecides`, `RegistrationIT.catalogWithNullStatusIsAContractErrorNotAServerError` |
+| R6 | Mensagem com corpo `null` escapando da DLQ imediata | `EventReader` rejeita envelope nulo | `EventReaderTest`, `…nullMessageBodyGoesToDeadLetterQueue`, `…nullResultBodyGoesToDeadLetterQueue` |
+| R7 | Overflow na paginação | Offset em `long`; página além do limite responde 400 | `…RejectsPagesBeyondTheSupportedOffset` (produtos e cartões) |
+| Melhoria 1 | Erros de banco no consumidor fora do backoff | `DataAccessException` e `TransactionException` seguem o backoff | `IssuanceRequestedListenerTest` |
+| Melhoria 2 | Métrica de decisão antes do commit | Log e métrica registrados só depois do commit | — |
+| Melhoria 3 | Smoke test sem timeout por chamada | `--connect-timeout 5 --max-time 15` em todos os `curl` | Smoke test |
+| Melhoria 4 | Portas expostas em todas as interfaces | Portas do Compose só em `127.0.0.1` | Compose |
+| Melhoria 5 | Diferença entre falha transitória e perda da fila | Documentada no README | — |
+| Melhoria 7 | Schema pouco expressivo do `PATCH` | `UpdateProductRequest` documentado no OpenAPI, com exemplos | `ProductApiIT.openApiDocumentsProblemResponsesAndBusinessErrors` |
 
-O estado de cada um está no README (seções "Garantias" e "Limitações conhecidas").
+A melhoria 6 (trocar o `Optional<Optional<String>>` do `PATCH` por um comando explícito) não foi feita: a semântica está isolada num único ponto.

@@ -126,7 +126,7 @@ flowchart LR
 - **Hexagonal enxuta por serviço:** `domain` (sem Spring, JPA, AWS SDK ou Jackson, verificado por ArchUnit), `application` (casos de uso e portas), `infrastructure` (persistência, SQS, Redis, HTTP) e `web`.
 - **`cardforge-platform`:** código técnico comum aos serviços (outbox e relay, envelope de evento, DLQ explícita, `X-Correlation-Id`, `ProblemDetail`, OpenAPI dos erros, clientes HTTP com client credentials). Não tem tipos de domínio (ArchUnit).
 - **Segurança:** os três serviços são Resource Servers e validam emissor, audiência (uma por serviço) e escopo (`products:*`, `cardholders:*`, `cards:*`). Entre serviços, client credentials com os escopos de leitura.
-- **Observabilidade:** Actuator só com `health`, `info` e `prometheus`; readiness depende só do banco. Logs JSON (ECS) com `traceId` e `correlationId`. Métricas `cardforge_outbox_pending`, `cardforge_outbox_oldest_age_seconds`, `cardforge_issuance_decisions_total`, `cardforge_product_cache_total`, `cardforge_pan_collisions_total` e `cardforge_bin_occupancy_ratio{bin}`. Esta última é atualizada a cada minuto e gera o log `ALERT BIN occupancy` a partir de 70% da faixa de 10⁷ PANs de cada BIN.
+- **Observabilidade:** Actuator só com `health`, `info` e `prometheus`; readiness depende só do banco. Logs JSON (ECS) com `traceId` e `correlationId`. Métricas `cardforge_outbox_pending`, `cardforge_outbox_oldest_age_seconds`, `cardforge_issuance_decisions_total`, `cardforge_product_cache_total`, `cardforge_pan_collisions_total` e `cardforge_bin_occupancy_ratio{bin}`. As decisões de emissão só são contadas depois do commit. A de ocupação é atualizada a cada minuto e gera o log `ALERT BIN occupancy` a partir de 70% da faixa de 10⁷ PANs de cada BIN.
 
 ## APIs
 
@@ -227,9 +227,9 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 | Falha no `card-service` | O que acontece |
 |---|---|
 | Negócio (produto inexistente ou cancelado, cartão já existente) | Grava `FAILED` com o motivo e publica o resultado na mesma transação; confirma a mensagem. **Sem retry.** |
-| Técnica (catálogo com timeout, 5xx ou conexão recusada; Redis e catálogo fora; PAN sem espaço após 20 tentativas) | Rollback, nada gravado. A mensagem **não é confirmada** e a próxima entrega é adiada por `ChangeMessageVisibility`: 30 s na primeira falha, dobrando a cada recebimento, jitter de ±20% e teto rígido de 5 min aplicado depois do jitter. |
+| Técnica (catálogo com timeout, 5xx ou conexão recusada; Redis e catálogo fora; banco ou transação indisponíveis; PAN sem espaço após 20 tentativas) | Rollback, nada gravado. A mensagem **não é confirmada** e a próxima entrega é adiada por `ChangeMessageVisibility`: 30 s na primeira falha, dobrando a cada recebimento, jitter de ±20% e teto rígido de 5 min aplicado depois do jitter. |
 | Configuração (401, 403 ou resposta fora do contrato do catálogo) | Log `ALERT configuration` e o mesmo backoff da falha técnica. Nunca é tratada como produto inexistente. |
-| Mensagem inválida ou versão desconhecida | Enviada de forma explícita e imediata para `card-issuance-requested-dlq`, com alerta em log. |
+| Mensagem inválida (inclusive corpo `null`) ou versão desconhecida | Enviada de forma explícita e imediata para `card-issuance-requested-dlq`, com alerta em log. |
 
 `maxReceiveCount` de `card-issuance-requested` é 29, o que dá um orçamento nominal de cerca de 2 h de retentativas antes da DLQ. No `cardholder-service`, resultados inválidos, desconhecidos ou contraditórios vão direto para `card-issuance-completed-dlq`.
 
@@ -239,7 +239,9 @@ Filas SQS Standard, cada uma com DLQ e redrive policy, criadas por `infra/locals
 2. **Na emissão, que é a decisão que vale:** o `card-service` só emite com uma observação `ACTIVE` do produto de no máximo 5 minutos. Se o cache não tiver uma observação válida, consulta o catálogo. `CANCELED` encerra a solicitação como `FAILED`/`PRODUCT_CANCELED`, e 404 como `FAILED`/`PRODUCT_NOT_FOUND`, sem retry.
 3. **Erros técnicos nunca viram "produto inexistente":** timeout, 5xx, 401, 403 e contrato inválido adiam a emissão, com retry e alerta, mas nunca a decidem.
 4. **Produto cancelado depois do cadastro também é barrado:** a emissão reconsulta o catálogo sempre que a observação passa de 5 minutos. O teste `issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` adianta o relógio. Aos 4 minutos, a observação `ACTIVE` ainda autoriza; passados 5, a emissão é recusada com `PRODUCT_CANCELED`.
-5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la.
+5. **Cancelamento conhecido é definitivo:** depois que o `card-service` observa `CANCELED`, a lápide no cache recusa novas emissões na hora, e nenhuma resposta `ACTIVE` antiga pode desfazê-la. Isso vale também para a emissão em andamento: se a resposta `ACTIVE` dela chega depois da lápide, a gravação é recusada e a emissão segue o cancelamento.
+6. **A idade da observação é conferida no ponto da emissão:** a observação que autorizou é verificada de novo dentro da transação, com o relógio desse momento. Se passou de 5 minutos durante a espera (conexão, lock), a transação é desfeita e a decisão recomeça com uma observação atual.
+7. **Resposta fora do contrato nunca decide:** um `200` do catálogo com status nulo, desconhecido ou com BIN inválido é erro de configuração (alerta e retry), nunca "produto inexistente" nem "cancelado".
 
 ## Comportamento sob falha das dependências
 
@@ -274,7 +276,7 @@ Estes são **controles de aplicação adotados**, alinhados a práticas de PCI-D
 | Nada sensível nos logs da aplicação | `toString()` de `Cpf`, `Cardholder`, `Pan` e dos DTOs de cadastro não expõe dados pessoais; os logs usam só IDs | `CpfTest`, `CardholderTest`, `LuhnAndPanTest` |
 | Nada sensível em mensagens e erros | Eventos só com IDs; `ProblemDetail` sem CPF, data de nascimento, PAN ou o payload original | `RegistrationIT` (payload do outbox e da mensagem publicada) |
 | Autenticação e autorização | JWT validando emissor, audiência (uma por serviço) e escopo; client credentials entre serviços; 401 e 403 em `ProblemDetail` | `ProductApiIT` e os ITs de escopo dos demais serviços |
-| Superfície mínima | Actuator só com `health`, `info` e `prometheus`; containers com usuário não root e imagens com versão fixada | `docker-compose.yml` e `Dockerfile` |
+| Superfície mínima | Actuator só com `health`, `info` e `prometheus`; portas do Compose só em `127.0.0.1`; containers com usuário não root e imagens com versão fixada | `docker-compose.yml` e `Dockerfile` |
 | Histórico auditável | **Não implementado nesta versão**: as mudanças de status atualizam só `updatedAt` | — |
 
 ## Testes
@@ -289,8 +291,11 @@ Estes são **controles de aplicação adotados**, alinhados a práticas de PCI-D
 | Recusa de negócio sem retry, e reentregue sem mudar o desfecho | `IssuanceIT.canceledProductFailsWithoutRetry`, `IssuanceIT.redeliveredBusinessRefusalKeepsItsOutcome` |
 | Solicitações concorrentes para o mesmo portador e produto: só uma emite | `IssuanceIT.concurrentRequestsForSameCardholderAndProductIssueOnlyOneCard` |
 | Catálogo fora (5xx, timeout, cache vencido): nenhuma emissão, retentativa com backoff | `IssuanceIT.catalogServerError…`, `catalogTimeout…`, `staleCacheWithCatalogDownDoesNotIssueAndRetries` |
-| Cancelamento conhecido impede o uso de observação `ACTIVE` antiga | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `RedisProductCacheIT` |
-| Emissão para em até 5 minutos depois do cancelamento | `IssuanceIT.issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes` |
+| Cancelamento conhecido impede o uso de observação `ACTIVE` antiga, inclusive por uma resposta concorrente | `IssuanceIT.knownCancellationRefusesIssuanceWithoutCatalog`, `IssuanceIT.activeResponseLosingToAKnownCancellationDoesNotIssue`, `RedisProductCacheIT` |
+| Emissão para em até 5 minutos depois do cancelamento, com a idade conferida no ponto da emissão | `IssuanceIT.issuanceStopsOnceTheLastActiveObservationIsOlderThanFiveMinutes`, `IssuanceIT.observationThatExpiresBeforeTheIssuingTransactionIsNotUsed` |
+| Resposta do catálogo fora do contrato e corpo `null` nunca decidem | `IssuanceIT.catalogResponseOutOfContractNeverDecides`, `IssuanceIT.nullMessageBodyGoesToDeadLetterQueue`, `RegistrationIT.catalogWithNullStatusIsAContractErrorNotAServerError`, `RegistrationIT.nullResultBodyGoesToDeadLetterQueue` |
+| Falha de banco no consumidor segue o backoff | `IssuanceRequestedListenerTest` |
+| Paginação além do limite responde 400, não 500 | `ProductApiIT.productListingRejectsPagesBeyondTheSupportedOffset`, `IssuanceIT.cardListingRejectsPagesBeyondTheSupportedOffset` |
 | Colisão forçada de PAN | `IssuanceIT.panCollisionIsResolvedWithANewCandidate` |
 | Produto na consulta do cartão: atual, desatualizado, catálogo, indisponível, cancelado | `IssuanceIT.cardQuery…`, `IssuanceIT.cardOfCanceledProductRemainsQueryable` |
 | Consulta consolidada distingue os cinco casos | `RegistrationIT.consolidatedViewDistinguishesTheFiveCases` |
