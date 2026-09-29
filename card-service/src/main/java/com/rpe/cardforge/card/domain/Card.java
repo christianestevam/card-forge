@@ -57,4 +57,39 @@ public record Card(
         now,
         now);
   }
+
+  /** ACTIVE -> BLOCKED. Pedido para o status atual devolve o próprio cartão (BR5.3). */
+  public Card block(Instant now) {
+    return transition(CardStatus.BLOCKED, now);
+  }
+
+  /** BLOCKED -> ACTIVE. */
+  public Card unblock(Instant now) {
+    return transition(CardStatus.ACTIVE, now);
+  }
+
+  /** ACTIVE ou BLOCKED -> CANCELED, terminal. */
+  public Card cancel(Instant now) {
+    return transition(CardStatus.CANCELED, now);
+  }
+
+  private Card transition(CardStatus target, Instant now) {
+    if (status == target) {
+      return this;
+    }
+    if (status == CardStatus.CANCELED) {
+      throw new InvalidStatusTransitionException(status, target);
+    }
+    return new Card(
+        id,
+        cardholderId,
+        productId,
+        issuanceRequestId,
+        panHmac,
+        panLastFour,
+        expirationDate,
+        target,
+        createdAt,
+        now);
+  }
 }

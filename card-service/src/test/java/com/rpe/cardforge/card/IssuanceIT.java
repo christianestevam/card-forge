@@ -337,6 +337,82 @@ class IssuanceIT {
   }
 
   @Test
+  void cardStatusTransitionsAreIdempotentAndCanceledIsTerminal() throws Exception {
+    Request r = Request.random();
+    stubProduct(r.productId(), "ACTIVE");
+    send(r.body(), "corr-status");
+    UUID cardId = awaitDecision(r, "ISSUED");
+
+    changeStatus(cardId, "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(cardId, "block")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("BLOCKED"));
+    changeStatus(cardId, "unblock")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    changeStatus(cardId, "unblock")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    changeStatus(cardId, "cancel")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+    changeStatus(cardId, "cancel")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELED"));
+    changeStatus(cardId, "block")
+        .andExpect(status().isConflict())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://cardforge.rpe.com.br/problems/invalid-status-transition"));
+    changeStatus(cardId, "unblock").andExpect(status().isConflict());
+
+    Map<String, Object> row =
+        jdbc.sql("SELECT status, created_at, updated_at FROM cards WHERE id = ?")
+            .param(cardId)
+            .query()
+            .singleRow();
+    assertThat(row.get("status")).isEqualTo("CANCELED");
+    assertThat(((java.sql.Timestamp) row.get("updated_at")))
+        .isAfter((java.sql.Timestamp) row.get("created_at"));
+  }
+
+  /** Cancelar libera o índice parcial: o portador pode receber um novo cartão do produto. */
+  @Test
+  void canceledCardAllowsNewCardForSameCardholderAndProduct() throws Exception {
+    Request first = Request.random();
+    stubProduct(first.productId(), "ACTIVE");
+    send(first.body(), "corr-first-card");
+    UUID firstCard = awaitDecision(first, "ISSUED");
+    changeStatus(firstCard, "cancel").andExpect(status().isOk());
+
+    Request second = new Request(UUID.randomUUID(), first.cardholderId(), first.productId());
+    send(second.body(), "corr-second-card");
+    UUID secondCard = awaitDecision(second, "ISSUED");
+
+    assertThat(secondCard).isNotEqualTo(firstCard);
+  }
+
+  @Test
+  void cardStatusChangeRequiresWriteScopeAndExistingCard() throws Exception {
+    mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
+                    "/api/v1/cards/" + UUID.randomUUID() + "/block")
+                .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:read"))))
+        .andExpect(status().isForbidden());
+    changeStatus(UUID.randomUUID(), "block").andExpect(status().isNotFound());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions changeStatus(
+      UUID cardId, String action) throws Exception {
+    return mvc.perform(
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
+                "/api/v1/cards/" + cardId + "/" + action)
+            .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_cards:write"))));
+  }
+
+  @Test
   void unknownCardIsNotFound() throws Exception {
     mvc.perform(
             org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(

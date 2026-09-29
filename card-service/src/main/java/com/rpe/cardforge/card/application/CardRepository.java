@@ -19,6 +19,11 @@ public interface CardRepository {
 
   Optional<Card> findById(UUID id);
 
+  /** Lê com lock de escrita, para aplicar transições concorrentes em série. */
+  Optional<Card> findByIdForUpdate(UUID id);
+
+  void updateStatus(Card card);
+
   class NonCanceledCardConflictException extends RuntimeException {
     public NonCanceledCardConflictException(Throwable cause) {
       super("A non-canceled card already exists for this cardholder and product", cause);

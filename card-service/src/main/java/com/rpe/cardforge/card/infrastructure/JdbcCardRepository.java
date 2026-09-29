@@ -78,6 +78,24 @@ class JdbcCardRepository implements CardRepository {
     return jdbc.sql("SELECT * FROM cards WHERE id = ?").param(id).query(this::map).optional();
   }
 
+  @Override
+  public Optional<Card> findByIdForUpdate(UUID id) {
+    return jdbc.sql("SELECT * FROM cards WHERE id = ? FOR UPDATE")
+        .param(id)
+        .query(this::map)
+        .optional();
+  }
+
+  @Override
+  public void updateStatus(Card card) {
+    jdbc.sql(
+            """
+            UPDATE cards SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?
+            """)
+        .params(card.status().name(), Timestamp.from(card.updatedAt()), card.id())
+        .update();
+  }
+
   private Card map(ResultSet rs, int row) throws SQLException {
     return new Card(
         rs.getObject("id", UUID.class),
