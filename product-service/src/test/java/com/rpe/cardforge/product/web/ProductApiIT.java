@@ -161,6 +161,33 @@ class ProductApiIT {
   }
 
   @Test
+  void listsProductsWithPagination() throws Exception {
+    createProduct(randomBin());
+    String newest = createProduct(randomBin());
+
+    mvc.perform(withScopes(get("/api/v1/products").param("size", "1"), "products:read"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(newest))
+        .andExpect(jsonPath("$.page.page").value(0))
+        .andExpect(jsonPath("$.page.size").value(1))
+        .andExpect(
+            jsonPath("$.page.totalElements").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
+
+    mvc.perform(withScopes(get("/api/v1/products"), "products:read"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.page.size").value(20));
+  }
+
+  @Test
+  void listingRejectsPageSizeAboveOneHundred() throws Exception {
+    mvc.perform(withScopes(get("/api/v1/products").param("size", "101"), "products:read"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(withScopes(get("/api/v1/products").param("page", "-1"), "products:read"))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
   void deleteIsNotAllowed() throws Exception {
     mvc.perform(withScopes(delete("/api/v1/products/" + UUID.randomUUID()), "products:write"))
         .andExpect(status().isMethodNotAllowed());

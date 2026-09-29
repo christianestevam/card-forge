@@ -3,6 +3,7 @@ package com.rpe.cardforge.product.application;
 import com.rpe.cardforge.product.domain.Bin;
 import com.rpe.cardforge.product.domain.Product;
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +35,13 @@ public class ProductService {
     Product canceled = current.cancel(clock.instant());
     return canceled == current ? current : repository.update(canceled);
   }
+
+  @Transactional(readOnly = true)
+  public ProductPage list(int page, int size) {
+    return new ProductPage(repository.findPage(page, size), page, size, repository.count());
+  }
+
+  public record ProductPage(List<Product> content, int page, int size, long totalElements) {}
 
   @Transactional(readOnly = true)
   public Product get(UUID id) {
