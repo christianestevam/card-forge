@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.rpe.cardforge.platform.paging.PageMetadata;
 import com.rpe.cardforge.product.application.ProductService;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
@@ -92,7 +93,27 @@ class ProductController {
           "bin-immutable quando o corpo contém bin (nunca ignorado); validation-failed para nome ou descrição inválidos",
       content = @Content(mediaType = PROBLEM_JSON, schema = @Schema(ref = PROBLEM)))
   @PatchMapping("/{productId}")
-  ProductResponse update(@PathVariable UUID productId, @RequestBody JsonNode body) {
+  ProductResponse update(
+      @PathVariable UUID productId,
+      @io.swagger.v3.oas.annotations.parameters.RequestBody(
+              description =
+                  "Campos ausentes mantêm o valor atual; description null limpa a descrição."
+                      + " bin não é editável: sua presença gera 422 bin-immutable.",
+              content =
+                  @Content(
+                      mediaType = "application/json",
+                      schema = @Schema(implementation = UpdateProductRequest.class),
+                      examples = {
+                        @ExampleObject(name = "renomear", value = "{\"name\": \"Gold Plus\"}"),
+                        @ExampleObject(
+                            name = "limpar descrição",
+                            value = "{\"description\": null}"),
+                        @ExampleObject(
+                            name = "rejeitado (bin-immutable)",
+                            value = "{\"bin\": \"12345678\"}")
+                      }))
+          @RequestBody
+          JsonNode body) {
     ProductUpdate update = ProductUpdate.parse(body);
     return ProductResponse.from(products.update(productId, update.name(), update.description()));
   }

@@ -273,7 +273,14 @@ class ProductApiIT {
                 .value(org.hamcrest.Matchers.containsString("bin-immutable")))
         .andExpect(
             jsonPath("$.info.description")
-                .value(org.hamcrest.Matchers.containsString("product-canceled-read-only")));
+                .value(org.hamcrest.Matchers.containsString("product-canceled-read-only")))
+        .andExpect(
+            jsonPath(
+                    "$.paths['/api/v1/products/{productId}'].patch.requestBody.content['application/json'].schema['$ref']")
+                .value(org.hamcrest.Matchers.endsWith("UpdateProductRequest")))
+        .andExpect(jsonPath("$.components.schemas.UpdateProductRequest.properties.name").exists())
+        .andExpect(
+            jsonPath("$.components.schemas.UpdateProductRequest.properties.bin").doesNotExist());
   }
 
   /** R7: página enorme passa na validação de page e size, mas não pode virar 500. */
