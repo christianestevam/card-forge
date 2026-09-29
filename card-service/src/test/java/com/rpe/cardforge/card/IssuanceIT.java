@@ -19,19 +19,25 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import com.rpe.cardforge.card.domain.RandomDigits;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -105,6 +111,31 @@ class IssuanceIT {
     registry.add("pan-hmac-key", () -> Base64.getEncoder().encodeToString(new byte[32]));
   }
 
+  /** Fonte de dígitos roteirizável, para forçar colisões de PAN (TC-PAN). */
+  @TestConfiguration
+  static class ScriptedDigitsConfig {
+    @Bean
+    @Primary
+    ScriptedDigits scriptedDigits() {
+      return new ScriptedDigits();
+    }
+  }
+
+  static class ScriptedDigits implements RandomDigits {
+    private final Deque<Integer> script = new ConcurrentLinkedDeque<>();
+
+    void enqueue(String digits) {
+      digits.chars().forEach(c -> script.add(c - '0'));
+    }
+
+    @Override
+    public int nextDigit() {
+      Integer next = script.poll();
+      return next != null ? next : ThreadLocalRandom.current().nextInt(10);
+    }
+  }
+
+  @Autowired ScriptedDigits digits;
   @Autowired SqsAsyncClient sqs;
   @Autowired JdbcClient jdbc;
   @Autowired StringRedisTemplate redisTemplate;
@@ -236,6 +267,38 @@ class IssuanceIT {
 
     awaitDecision(r, "FAILED");
     assertThat(failureReason(r)).isEqualTo("PRODUCT_NOT_FOUND");
+  }
+
+  /**
+   * TC-PAN: o segundo cartão sorteia o mesmo PAN do primeiro; o ON CONFLICT (pan_hmac) detecta a
+   * colisão, um novo candidato é gerado e cartão, resultado e outbox são gravados juntos.
+   */
+  @Test
+  void panCollisionIsResolvedWithANewCandidate() {
+    UUID productId = UUID.randomUUID();
+    stubProduct(productId, "ACTIVE");
+    Request first = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+    Request second = new Request(UUID.randomUUID(), UUID.randomUUID(), productId);
+
+    digits.enqueue("1111111");
+    send(first.body(), "corr-pan-1");
+    UUID firstCard = awaitDecision(first, "ISSUED");
+
+    digits.enqueue("1111111"); // colide com o primeiro cartão
+    digits.enqueue("2222222");
+    send(second.body(), "corr-pan-2");
+    UUID secondCard = awaitDecision(second, "ISSUED");
+
+    Map<String, Object> a =
+        jdbc.sql("SELECT * FROM cards WHERE id = ?").param(firstCard).query().singleRow();
+    Map<String, Object> b =
+        jdbc.sql("SELECT * FROM cards WHERE id = ?").param(secondCard).query().singleRow();
+    assertThat((String) a.get("pan_last_four")).startsWith("111");
+    assertThat((String) b.get("pan_last_four")).startsWith("222");
+    assertThat(b.get("pan_hmac")).isNotEqualTo(a.get("pan_hmac"));
+    assertThat(b.get("issuance_request_id")).isEqualTo(second.issuanceRequestId());
+    assertThat(awaitCompletedEvents(second, 1).getFirst().get("cardId").asText())
+        .isEqualTo(secondCard.toString());
   }
 
   /** (c) A mesma mensagem entregue duas vezes gera um único cartão; o resultado é republicado. */
